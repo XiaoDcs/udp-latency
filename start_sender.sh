@@ -3,7 +3,7 @@
 # 无人机UDP通信测试系统 - 发送端启动脚本
 
 # 默认配置
-REMOTE_IP="192.168.104.2"
+REMOTE_IP="192.168.31.93"
 REMOTE_PORT=20001
 LOCAL_PORT=20002
 FREQUENCY=10
@@ -95,13 +95,13 @@ read
 
 # 在后台启动GPS记录器
 echo "正在启动GPS记录器..."
-python gps_logger.py --interval=$GPS_INTERVAL --time=$RUNNING_TIME --log-path=$LOG_PATH &
-GPS_PID=$!
+# python gps_logger.py --interval=$GPS_INTERVAL --time=$RUNNING_TIME --log-path=$LOG_PATH &
+# GPS_PID=$!
 
 # 在后台启动通信模块记录器
 echo "正在启动通信模块记录器..."
-python comms_logger.py --interval=$COMMS_INTERVAL --time=$RUNNING_TIME --log-path=$LOG_PATH &
-COMMS_PID=$!
+# python comms_logger.py --interval=$COMMS_INTERVAL --time=$RUNNING_TIME --log-path=$LOG_PATH &
+# COMMS_PID=$!
 
 # 稍等一下，确保记录器已经启动
 sleep 2
@@ -114,8 +114,8 @@ python udp_sender.py --remote-ip=$REMOTE_IP --remote-port=$REMOTE_PORT --local-p
 
 # 测试完成后，确保后台进程已经结束
 echo "UDP发送完成，等待记录器完成..."
-wait $GPS_PID
-wait $COMMS_PID
+# wait $GPS_PID
+# wait $COMMS_PID
 
 echo "发送端测试完成！"
 echo "日志文件已保存到 $LOG_PATH 目录" 
