@@ -14,7 +14,7 @@ def main():
     parser.add_argument('--peer-ip', required=True)
     parser.add_argument('--time', type=int, default=60)
     parser.add_argument('--frequency', type=float, default=10)
-    parser.add_argument('--packet-size', type=int, default=200)
+    parser.add_argument('--packet-size', type=int, default=1000)
     
     args = parser.parse_args()
     

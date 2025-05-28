@@ -65,7 +65,7 @@ show_help() {
     echo "  --peer-ip=IP             对方IP地址 (默认: 192.168.104.20)"
     echo "  --log-path=PATH          日志保存路径 (默认: ./logs)"
     echo "  --frequency=FREQ         发送频率(Hz) (默认: 10)"
-    echo "  --packet-size=SIZE       数据包大小(字节) (默认: 200)"
+    echo "  --packet-size=SIZE       数据包大小(字节) (默认: 1000)"
     echo "  --time=TIME              运行时间(秒) (默认: 60)"
     echo "  --buffer-size=SIZE       缓冲区大小(字节) (默认: 1500)"
     echo ""

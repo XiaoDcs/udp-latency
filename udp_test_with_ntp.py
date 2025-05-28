@@ -665,7 +665,7 @@ class UDPTestManager:
             '--local-port', str(self.config.get('local_port', 20002)),
             '--remote-ip', self.config.get('remote_ip', '192.168.104.20'),
             '--remote-port', str(self.config.get('remote_port', 20001)),
-            '--packet-size', str(self.config.get('packet_size', 200)),
+            '--packet-size', str(self.config.get('packet_size', 1000)),
             '--frequency', str(self.config.get('frequency', 10)),
             '--time', str(self.config.get('running_time', 60)),
             '--log-path', self.log_path
@@ -819,8 +819,8 @@ def main():
                        help='远程端口 (默认: 20001)')
     parser.add_argument('--local-port', type=int, default=20002,
                        help='本地端口 (默认: 20002)')
-    parser.add_argument('--packet-size', type=int, default=200,
-                       help='数据包大小(字节) (默认: 200)')
+    parser.add_argument('--packet-size', type=int, default=1000,
+                       help='数据包大小(字节) (默认: 1000)')
     parser.add_argument('--frequency', type=float, default=10.0,
                        help='发送频率(Hz) (默认: 10.0)')
     parser.add_argument('--running-time', type=int, default=60,

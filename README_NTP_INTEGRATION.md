@@ -731,7 +731,7 @@ print(correlation)
 - `--peer-ip=IP`: 对方IP地址 (默认: 192.168.104.20)
 - `--log-path=PATH`: 日志保存路径 (默认: ./logs)
 - `--frequency=FREQ`: 发送频率(Hz) (默认: 10)
-- `--packet-size=SIZE`: 数据包大小(字节) (默认: 200)
+- `--packet-size=SIZE`: 数据包大小(字节) (默认: 1000)
 - `--time=TIME`: 运行时间(秒) (默认: 60)
 - `--buffer-size=SIZE`: 缓冲区大小(字节) (默认: 1500)
 
