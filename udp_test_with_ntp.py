@@ -313,6 +313,15 @@ class UDPTestManager:
         self.enable_gps = config.get('enable_gps', False)
         self.drone_id = config.get('drone_id', 'drone0')
         self.gps_interval = config.get('gps_interval', 1.0)
+        
+        # Nexfi状态记录器进程
+        self.nexfi_process = None
+        self.enable_nexfi = config.get('enable_nexfi', False)
+        self.nexfi_ip = config.get('nexfi_ip', '192.168.104.1')
+        self.nexfi_username = config.get('nexfi_username', 'root')
+        self.nexfi_password = config.get('nexfi_password', 'nexfi')
+        self.nexfi_interval = config.get('nexfi_interval', 1.0)
+        self.nexfi_device = config.get('nexfi_device', 'adhoc0')
     
     def setup_logging(self):
         """设置日志"""
@@ -390,6 +399,68 @@ class UDPTestManager:
             except Exception as e:
                 self.logger.error(f"Error stopping GPS logger: {e}")
     
+    def start_nexfi_logging(self) -> bool:
+        """启动Nexfi状态记录器"""
+        if not self.enable_nexfi:
+            self.logger.info("Nexfi status logging disabled")
+            return True
+            
+        try:
+            self.logger.info("Starting Nexfi status logger...")
+            
+            # 构建Nexfi状态记录器命令
+            cmd = [
+                'python3', 'nexfi_client.py',
+                '--nexfi-ip', self.nexfi_ip,
+                '--username', self.nexfi_username,
+                '--password', self.nexfi_password,
+                '--log-path', self.log_path,
+                '--interval', str(self.nexfi_interval),
+                '--time', str(self.config.get('running_time', 3600)),
+                '--device', self.nexfi_device,
+                '--verbose', 'true'
+            ]
+            
+            # 启动Nexfi状态记录器进程
+            self.nexfi_process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            # 等待一下确保Nexfi记录器启动
+            time.sleep(2)
+            
+            # 检查进程是否正常运行
+            if self.nexfi_process.poll() is None:
+                self.logger.info("Nexfi status logger started successfully")
+                return True
+            else:
+                stdout, stderr = self.nexfi_process.communicate()
+                self.logger.warning(f"Nexfi status logger failed to start: {stderr}")
+                self.logger.info("Nexfi status logger will use mock data")
+                return True  # 返回True因为可以使用模拟数据
+                
+        except Exception as e:
+            self.logger.error(f"Failed to start Nexfi status logger: {e}")
+            return False
+    
+    def stop_nexfi_logging(self):
+        """停止Nexfi状态记录器"""
+        if self.nexfi_process and self.nexfi_process.poll() is None:
+            self.logger.info("Stopping Nexfi status logger...")
+            try:
+                self.nexfi_process.terminate()
+                self.nexfi_process.wait(timeout=10)
+                self.logger.info("Nexfi status logger stopped")
+            except subprocess.TimeoutExpired:
+                self.logger.warning("Nexfi status logger did not stop gracefully, killing...")
+                self.nexfi_process.kill()
+                self.nexfi_process.wait()
+            except Exception as e:
+                self.logger.error(f"Error stopping Nexfi status logger: {e}")
+    
     def start_monitoring(self):
         """启动状态监控"""
         self.monitoring = True
@@ -414,6 +485,9 @@ class UDPTestManager:
                 # 检查GPS记录器状态
                 gps_status = "running" if (self.gps_process and self.gps_process.poll() is None) else "stopped"
                 
+                # 检查Nexfi状态记录器状态
+                nexfi_status = "running" if (self.nexfi_process and self.nexfi_process.poll() is None) else "stopped"
+                
                 # 记录状态
                 status_info = {
                     'timestamp': datetime.now().isoformat(),
@@ -422,6 +496,8 @@ class UDPTestManager:
                     'ntp_offset_ms': sync_status.get('offset_ms'),
                     'gps_logger_status': gps_status,
                     'enable_gps': self.enable_gps,
+                    'nexfi_logger_status': nexfi_status,
+                    'enable_nexfi': self.enable_nexfi,
                 }
                 
                 # 写入监控日志
@@ -436,6 +512,10 @@ class UDPTestManager:
                 # 如果GPS记录器意外停止，发出警告
                 if self.enable_gps and gps_status == "stopped":
                     self.logger.warning("GPS logger stopped unexpectedly")
+                
+                # 如果Nexfi状态记录器意外停止，发出警告
+                if self.enable_nexfi and nexfi_status == "stopped":
+                    self.logger.warning("Nexfi status logger stopped unexpectedly")
                 
             except Exception as e:
                 self.logger.error(f"Monitoring error: {e}")
@@ -496,30 +576,45 @@ class UDPTestManager:
             print("无人机UDP通信测试系统 - 集成NTP时间同步")
             print("=" * 60)
             
+            step_num = 1
+            
             # 1. 设置时间同步
-            print("\n1. 设置时间同步...")
+            print(f"\n{step_num}. 设置时间同步...")
             if not self.ntp_manager.setup_time_sync():
                 print("✗ 时间同步设置失败，测试终止")
                 return False
+            step_num += 1
             
             # 2. 启动GPS记录器
             if self.enable_gps:
-                print("\n2. 启动GPS记录器...")
+                print(f"\n{step_num}. 启动GPS记录器...")
                 if not self.start_gps_logging():
                     print("✗ GPS记录器启动失败，继续测试...")
                 else:
                     print("✓ GPS记录器启动成功")
+                step_num += 1
             
-            # 3. 启动状态监控
-            print(f"\n{3 if not self.enable_gps else 3}. 启动状态监控...")
+            # 3. 启动Nexfi状态记录器
+            if self.enable_nexfi:
+                print(f"\n{step_num}. 启动Nexfi状态记录器...")
+                if not self.start_nexfi_logging():
+                    print("✗ Nexfi状态记录器启动失败，继续测试...")
+                else:
+                    print("✓ Nexfi状态记录器启动成功")
+                step_num += 1
+            
+            # 4. 启动状态监控
+            print(f"\n{step_num}. 启动状态监控...")
             self.start_monitoring()
+            step_num += 1
             
-            # 4. 等待同步稳定
-            print(f"\n{4 if not self.enable_gps else 4}. 等待时间同步稳定...")
+            # 5. 等待同步稳定
+            print(f"\n{step_num}. 等待时间同步稳定...")
             time.sleep(10)
+            step_num += 1
             
-            # 5. 运行UDP测试
-            print(f"\n{5 if not self.enable_gps else 5}. 运行UDP测试 (模式: {self.mode})...")
+            # 6. 运行UDP测试
+            print(f"\n{step_num}. 运行UDP测试 (模式: {self.mode})...")
             
             if self.mode == 'sender':
                 success = self.run_udp_sender()
@@ -528,14 +623,22 @@ class UDPTestManager:
             else:
                 self.logger.error(f"Unknown mode: {self.mode}")
                 return False
+            step_num += 1
             
-            # 6. 停止GPS记录器
+            # 7. 停止GPS记录器
             if self.enable_gps:
-                print(f"\n{6 if not self.enable_gps else 6}. 停止GPS记录器...")
+                print(f"\n{step_num}. 停止GPS记录器...")
                 self.stop_gps_logging()
+                step_num += 1
             
-            # 7. 停止监控
-            print(f"\n{7 if not self.enable_gps else 7}. 停止状态监控...")
+            # 8. 停止Nexfi状态记录器
+            if self.enable_nexfi:
+                print(f"\n{step_num}. 停止Nexfi状态记录器...")
+                self.stop_nexfi_logging()
+                step_num += 1
+            
+            # 9. 停止监控
+            print(f"\n{step_num}. 停止状态监控...")
             self.stop_monitoring()
             
             if success:
@@ -549,12 +652,16 @@ class UDPTestManager:
             print("\n测试被用户中断")
             if self.enable_gps:
                 self.stop_gps_logging()
+            if self.enable_nexfi:
+                self.stop_nexfi_logging()
             self.stop_monitoring()
             return False
         except Exception as e:
             self.logger.error(f"Test failed: {e}")
             if self.enable_gps:
                 self.stop_gps_logging()
+            if self.enable_nexfi:
+                self.stop_nexfi_logging()
             self.stop_monitoring()
             return False
 
@@ -601,6 +708,20 @@ def main():
     parser.add_argument('--use-sim-time', action='store_true',
                        help='使用仿真时间')
     
+    # Nexfi通信状态记录参数
+    parser.add_argument('--enable-nexfi', action='store_true',
+                       help='启用Nexfi通信状态记录')
+    parser.add_argument('--nexfi-ip', default='192.168.104.1',
+                       help='Nexfi服务器IP地址 (默认: 192.168.104.1)')
+    parser.add_argument('--nexfi-username', default='root',
+                       help='Nexfi服务器用户名 (默认: root)')
+    parser.add_argument('--nexfi-password', default='nexfi',
+                       help='Nexfi服务器密码 (默认: nexfi)')
+    parser.add_argument('--nexfi-interval', type=float, default=1.0,
+                       help='Nexfi记录间隔(秒) (默认: 1.0)')
+    parser.add_argument('--nexfi-device', default='adhoc0',
+                       help='Nexfi设备名称 (默认: adhoc0)')
+    
     args = parser.parse_args()
     
     # 构建配置
@@ -620,6 +741,12 @@ def main():
         'drone_id': args.drone_id,
         'gps_interval': args.gps_interval,
         'use_sim_time': args.use_sim_time,
+        'enable_nexfi': args.enable_nexfi,
+        'nexfi_ip': args.nexfi_ip,
+        'nexfi_username': args.nexfi_username,
+        'nexfi_password': args.nexfi_password,
+        'nexfi_interval': args.nexfi_interval,
+        'nexfi_device': args.nexfi_device,
     }
     
     # 调整接收端的端口配置

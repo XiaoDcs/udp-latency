@@ -13,6 +13,9 @@
 # 核心依赖 - Core Dependencies
 # 注意：socket, time, csv, json, subprocess, threading, logging 等是Python标准库，无需安装
 
+# HTTP请求库 - HTTP Request Library
+requests>=2.25.0       # Nexfi通信模块API调用
+
 # 数据处理和分析 - Data Processing and Analysis
 pandas>=1.3.0
 numpy>=1.20.0

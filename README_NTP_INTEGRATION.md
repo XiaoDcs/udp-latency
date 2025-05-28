@@ -78,8 +78,9 @@ source /opt/ros/humble/setup.bash
 - ✅ **无需地面站**: 两台无人机自主完成时间同步
 - ✅ **一键启动**: 简化的启动脚本，自动化整个测试流程
 - ✅ **GPS数据记录**: 集成GPS位置记录，支持ROS2环境
+- ✅ **Nexfi通信状态记录**: 实时记录通信模块状态和链路质量
 - ✅ **实时监控**: 持续监控时间同步状态和系统状态
-- ✅ **完整日志**: 详细的测试日志、GPS轨迹和同步状态记录
+- ✅ **完整日志**: 详细的测试日志、GPS轨迹、通信状态和同步状态记录
 - ✅ **故障处理**: 自动处理网络中断和同步异常
 
 ## 系统架构
@@ -91,9 +92,12 @@ source /opt/ros/humble/setup.bash
     ↓                                    ↓
 启动GPS记录器                  ←→    启动GPS记录器
     ↓                                    ↓
+启动Nexfi状态记录器            ←→    启动Nexfi状态记录器
+    ↓                                    ↓
 运行UDP发送端/接收端           ←→    运行UDP接收端/发送端
     ↓                                    ↓
 记录测试日志和GPS轨迹          ←→    记录测试日志和GPS轨迹
+记录通信状态和链路质量          ←→    记录通信状态和链路质量
 ```
 
 ## 文件结构
@@ -107,6 +111,7 @@ udp-latency/
 ├── udp_sender.py              # UDP发送端
 ├── udp_receiver.py            # UDP接收端
 ├── gps.py                     # GPS数据记录器
+├── nexfi_client.py            # Nexfi通信状态记录器 ⭐
 ├── example_usage.sh           # 使用示例
 ├── check_environment.sh       # 环境检查脚本
 ├── README_NTP_INTEGRATION.md  # 本文档
@@ -127,6 +132,11 @@ udp-latency/
 - ROS2 环境 (Humble/Galactic/Foxy)
 - as2_python_api 包
 - 无人机GPS接口正常工作
+
+### Nexfi通信状态记录额外要求 (setup.sh会自动安装)
+- requests 库 (HTTP请求)
+- Nexfi通信模块设备 (可选，无设备时使用模拟数据)
+- 网络连接到Nexfi设备 (通常为192.168.104.1)
 
 ## 详细使用说明
 
@@ -171,6 +181,34 @@ source venv/bin/activate
 ./start_test.sh receiver --local-ip=192.168.104.20 --peer-ip=192.168.104.10 --enable-gps --drone-id=drone1
 ```
 
+#### 完整测试（含Nexfi通信状态记录）
+
+**无人机A (192.168.104.10) - 发送端**
+```bash
+source venv/bin/activate
+./start_test.sh sender --local-ip=192.168.104.10 --peer-ip=192.168.104.20 --enable-nexfi --nexfi-ip=192.168.104.1
+```
+
+**无人机B (192.168.104.20) - 接收端**
+```bash
+source venv/bin/activate
+./start_test.sh receiver --local-ip=192.168.104.20 --peer-ip=192.168.104.10 --enable-nexfi --nexfi-ip=192.168.104.1
+```
+
+#### 全功能测试（GPS + Nexfi + UDP）
+
+**无人机A (192.168.104.10) - 发送端**
+```bash
+source venv/bin/activate
+./start_test.sh sender --local-ip=192.168.104.10 --peer-ip=192.168.104.20 --enable-gps --drone-id=drone0 --enable-nexfi --nexfi-ip=192.168.104.1 --time=300
+```
+
+**无人机B (192.168.104.20) - 接收端**
+```bash
+source venv/bin/activate
+./start_test.sh receiver --local-ip=192.168.104.20 --peer-ip=192.168.104.10 --enable-gps --drone-id=drone1 --enable-nexfi --nexfi-ip=192.168.104.1 --time=300
+```
+
 ## 日志文件说明
 
 测试完成后，会在指定的日志目录生成以下文件：
@@ -186,6 +224,9 @@ source venv/bin/activate
 
 ### GPS记录日志
 - `gps_logger_[drone_id]_YYYYMMDD_HHMMSS.csv`: GPS位置和状态日志
+
+### Nexfi通信状态日志
+- `nexfi_status_YYYYMMDD_HHMMSS.csv`: Nexfi通信模块状态和链路质量日志
 
 ### 日志格式示例
 
@@ -205,15 +246,22 @@ seq_num,send_timestamp,recv_timestamp,delay,src_ip,src_port,packet_size,rssi
 
 **GPS记录日志 (CSV)**:
 ```csv
-timestamp,latitude,longitude,altitude,local_x,local_y,local_z,connected,armed,offboard,gps_fix_type,satellites_used
-1640995200.123456,39.123456,116.123456,100.5,10.2,5.3,2.1,true,true,false,3,12
-1640995201.123456,39.123457,116.123457,100.6,10.3,5.4,2.2,true,true,false,3,12
+timestamp,latitude,longitude,altitude,local_x,local_y,local_z,connected,armed,offboard
+1640995200.123456,39.123456,116.123456,100.5,10.2,5.3,2.1,true,true,false
+1640995201.123456,39.123457,116.123457,100.6,10.3,5.4,2.2,true,true,false
+```
+
+**Nexfi通信状态日志 (CSV)**:
+```csv
+timestamp,mesh_enabled,channel,frequency_band,tx_power,work_mode,node_id,connected_nodes,avg_rssi,avg_snr,throughput,cpu_usage,memory_usage,uptime,firmware_version,topology_nodes,link_quality
+1640995200.123456,True,149,20,20,adhoc,1,2,-65.5,25.3,45.2,15%,42%,2h 30m,v1.0.0,3,180.5
+1640995201.123456,True,149,20,20,adhoc,1,2,-66.1,24.8,44.8,16%,43%,2h 30m,v1.0.0,3,179.2
 ```
 
 **系统监控日志 (JSON Lines)**:
 ```json
-{"timestamp": "2021-12-31T12:00:00.123456", "ntp_role": "client", "ntp_synced": true, "ntp_offset_ms": 2.3, "gps_logger_status": "running", "enable_gps": true}
-{"timestamp": "2021-12-31T12:00:10.123456", "ntp_role": "client", "ntp_synced": true, "ntp_offset_ms": 1.8, "gps_logger_status": "running", "enable_gps": true}
+{"timestamp": "2021-12-31T12:00:00.123456", "ntp_role": "client", "ntp_synced": true, "ntp_offset_ms": 2.3, "gps_logger_status": "running", "enable_gps": true, "nexfi_logger_status": "running", "enable_nexfi": true}
+{"timestamp": "2021-12-31T12:00:10.123456", "ntp_role": "client", "ntp_synced": true, "ntp_offset_ms": 1.8, "gps_logger_status": "running", "enable_gps": true, "nexfi_logger_status": "running", "enable_nexfi": true}
 ```
 
 ## GPS记录功能详解
@@ -232,8 +280,6 @@ timestamp,latitude,longitude,altitude,local_x,local_y,local_z,connected,armed,of
 | connected | bool | 无人机连接状态 |
 | armed | bool | 无人机解锁状态 |
 | offboard | bool | Offboard模式状态 |
-| gps_fix_type | int | GPS定位类型 (0=无定位, 3=3D定位) |
-| satellites_used | int | 使用的卫星数量 |
 
 ### GPS记录器独立使用
 
@@ -270,6 +316,74 @@ python3 -c "from as2_python_api.drone_interface_gps import DroneInterfaceGPS; pr
 # 检查无人机连接
 ros2 topic list | grep gps
 ```
+
+## Nexfi通信状态记录功能详解
+
+### Nexfi数据字段说明
+
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| timestamp | float | Unix时间戳 |
+| mesh_enabled | bool | Mesh网络是否启用 |
+| channel | str | 无线信道号 |
+| frequency_band | str | 频宽 (MHz) |
+| tx_power | str | 发射功率 (dBm) |
+| work_mode | str | 工作模式 (adhoc/ap/client) |
+| node_id | str | 节点ID |
+| connected_nodes | int | 连接的节点数量 |
+| avg_rssi | float | 平均信号强度 (dBm) |
+| avg_snr | float | 平均信噪比 (dB) |
+| throughput | str | 吞吐量 (Mbps) |
+| cpu_usage | str | CPU使用率 |
+| memory_usage | str | 内存使用率 |
+| uptime | str | 系统运行时间 |
+| firmware_version | str | 固件版本 |
+| topology_nodes | int | 拓扑中的节点总数 |
+| link_quality | float | 平均链路质量 (0-255) |
+
+### Nexfi记录器独立使用
+
+Nexfi记录器也可以独立运行：
+
+```bash
+# 基本使用 - 记录到CSV
+python3 nexfi_client.py --nexfi-ip=192.168.104.1 --interval=1.0 --time=300
+
+# 自定义参数
+python3 nexfi_client.py --nexfi-ip=192.168.104.1 --username=admin --password=mypass --device=wlan0
+
+# 监控模式 - 实时显示状态
+python3 nexfi_client.py --nexfi-ip=192.168.104.1 --monitor=5
+
+# 保存当前状态到JSON
+python3 nexfi_client.py --nexfi-ip=192.168.104.1 --save --output=nexfi_snapshot.json
+
+# 查看帮助
+python3 nexfi_client.py --help
+```
+
+### Nexfi设备连接测试
+
+在使用前可以先测试Nexfi设备连接：
+
+```bash
+# 测试HTTP连接
+curl http://192.168.104.1
+
+# 使用Python测试
+python3 -c "
+import requests
+try:
+    r = requests.get('http://192.168.104.1', timeout=3)
+    print('Nexfi设备可达')
+except:
+    print('Nexfi设备不可达')
+"
+```
+
+### 模拟数据模式
+
+当无法连接到Nexfi设备时，记录器会自动使用模拟数据继续运行，确保测试不会中断。模拟数据包含合理的默认值，可用于测试和开发。
 
 ## 时间同步机制
 
@@ -376,19 +490,38 @@ sudo -l
 sudo nano /etc/chrony/chrony.conf
 ```
 
-### 调试模式
-
-如果需要更详细的调试信息，可以直接运行Python脚本：
-
+#### 7. Nexfi状态记录器启动失败
+**症状**: 显示 "Nexfi status logger failed to start"
+**解决方案**:
 ```bash
-# 启用详细日志
-python3 udp_test_with_ntp.py --mode=sender --local-ip=192.168.104.10 --peer-ip=192.168.104.20 --enable-gps
+# 检查requests库
+pip install requests
 
-# 单独测试GPS记录器
-python3 gps.py --drone-id=drone0 --interval=1.0 --time=30 --verbose=true
+# 测试Nexfi连接
+python3 nexfi_client.py --nexfi-ip=192.168.104.1 --monitor=1
 
-# 检查系统监控日志
-tail -f ./logs/system_monitor.jsonl
+# 检查网络连接
+ping 192.168.104.1
+
+# 手动测试API
+curl http://192.168.104.1/ubus
+```
+
+#### 8. Nexfi数据获取失败
+**症状**: Nexfi日志显示模拟数据
+**解决方案**:
+```bash
+# 检查Nexfi设备状态
+# 确保Nexfi设备已开机并正常工作
+
+# 检查防火墙
+sudo ufw allow from 192.168.104.1
+
+# 验证登录凭据
+# 确保用户名和密码正确
+
+# 使用浏览器访问
+# 打开 http://192.168.104.1 查看Web界面
 ```
 
 ### 手动验证时间同步
@@ -415,7 +548,7 @@ import pandas as pd
 df = pd.read_csv('./logs/gps_logger_drone0_*.csv')
 print(df.head())
 print(f'GPS记录数: {len(df)}')
-print(f'有效定位数: {len(df[df.gps_fix_type > 0])}')
+print(f'有效GPS坐标数: {len(df[(df.latitude != 0) | (df.longitude != 0)])}')
 "
 ```
 
@@ -474,6 +607,72 @@ udp_df = pd.read_csv('logs/udp_receiver_*.csv')
 # ... 分析代码
 ```
 
+### Nexfi通信状态分析
+```python
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# 读取Nexfi状态数据
+nexfi_df = pd.read_csv('logs/nexfi_status_*.csv')
+
+# 绘制信号强度和信噪比变化
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
+
+# RSSI变化图
+ax1.plot(nexfi_df['timestamp'], nexfi_df['avg_rssi'], 'b-')
+ax1.set_ylabel('RSSI (dBm)')
+ax1.set_title('信号强度变化')
+ax1.grid(True)
+
+# SNR变化图
+ax2.plot(nexfi_df['timestamp'], nexfi_df['avg_snr'], 'g-')
+ax2.set_ylabel('SNR (dB)')
+ax2.set_xlabel('时间戳')
+ax2.set_title('信噪比变化')
+ax2.grid(True)
+
+plt.tight_layout()
+plt.show()
+
+# 分析连接稳定性
+print(f"平均连接节点数: {nexfi_df['connected_nodes'].mean():.2f}")
+print(f"平均RSSI: {nexfi_df['avg_rssi'].mean():.2f} dBm")
+print(f"平均SNR: {nexfi_df['avg_snr'].mean():.2f} dB")
+print(f"平均链路质量: {nexfi_df['link_quality'].mean():.2f}")
+```
+
+### 综合分析示例
+```python
+# 结合UDP延迟、GPS位置和Nexfi状态进行综合分析
+import pandas as pd
+import numpy as np
+
+# 读取所有数据
+udp_df = pd.read_csv('logs/udp_receiver_*.csv')
+gps_df = pd.read_csv('logs/gps_logger_*.csv')
+nexfi_df = pd.read_csv('logs/nexfi_status_*.csv')
+
+# 时间对齐（使用最近邻匹配）
+def align_data(df1, df2, time_col='timestamp'):
+    merged = pd.merge_asof(
+        df1.sort_values(time_col),
+        df2.sort_values(time_col),
+        on=time_col,
+        direction='nearest',
+        tolerance=1.0  # 1秒容差
+    )
+    return merged
+
+# 合并数据
+combined = align_data(udp_df, gps_df)
+combined = align_data(combined, nexfi_df)
+
+# 分析延迟与信号质量的关系
+correlation = combined[['delay', 'avg_rssi', 'avg_snr']].corr()
+print("延迟与信号质量相关性:")
+print(correlation)
+```
+
 ## 注意事项
 
 1. **sudo权限**: 配置NTP需要sudo权限
@@ -484,6 +683,8 @@ udp_df = pd.read_csv('logs/udp_receiver_*.csv')
 6. **ROS2环境**: GPS记录需要正确配置的ROS2环境
 7. **GPS信号**: 确保GPS信号良好，特别是在室外环境
 8. **存储空间**: 确保有足够空间存储日志文件
+9. **Nexfi设备**: 确保Nexfi设备正常工作并可访问
+10. **网络权限**: Nexfi API访问需要正确的用户名和密码
 
 ## 技术支持
 
@@ -520,16 +721,25 @@ udp_df = pd.read_csv('logs/udp_receiver_*.csv')
 - `--gps-interval=SEC`: GPS记录间隔(秒) (默认: 1.0)
 - `--use-sim-time`: 使用仿真时间
 
+**Nexfi通信状态记录选项:**
+- `--enable-nexfi`: 启用Nexfi通信状态记录
+- `--nexfi-ip=IP`: Nexfi设备IP地址 (默认: 192.168.104.1)
+- `--nexfi-username=USERNAME`: Nexfi登录用户名 (默认: root)
+- `--nexfi-password=PASSWORD`: Nexfi登录密码 (默认: nexfi)
+- `--nexfi-interval=SEC`: Nexfi记录间隔(秒) (默认: 1.0)
+- `--nexfi-device=DEVICE`: 网络设备名称 (默认: adhoc0)
+
 ### 测试流程
 
-1. **依赖检查**: 自动检查Python3、必要脚本文件、ROS2环境(如启用GPS)
+1. **依赖检查**: 自动检查Python3、必要脚本文件、ROS2环境(如启用GPS)、requests库(如启用Nexfi)
 2. **网络检查**: 验证网络连接和对方无人机可达性
 3. **配置确认**: 显示测试配置，等待用户确认
 4. **时间同步**: 自动安装chrony，配置NTP，建立时间同步
 5. **GPS记录**: 启动GPS数据记录器(如启用)
-6. **状态监控**: 启动后台监控线程，持续记录同步状态
-7. **UDP测试**: 运行UDP发送/接收测试
-8. **结果保存**: 保存所有日志文件到指定目录
+6. **Nexfi记录**: 启动Nexfi通信状态记录器(如启用)
+7. **状态监控**: 启动后台监控线程，持续记录同步状态
+8. **UDP测试**: 运行UDP发送/接收测试
+9. **结果保存**: 保存所有日志文件到指定目录
 
 ### 示例用法
 
@@ -586,4 +796,22 @@ source venv/bin/activate
 # 无人机B (192.168.1.101)
 source venv/bin/activate
 ./start_test.sh receiver --local-ip=192.168.1.101 --peer-ip=192.168.1.100 --enable-gps --drone-id=uav_beta
+```
+
+### 调试模式
+
+如果需要更详细的调试信息，可以直接运行Python脚本：
+
+```bash
+# 启用详细日志
+python3 udp_test_with_ntp.py --mode=sender --local-ip=192.168.104.10 --peer-ip=192.168.104.20 --enable-gps --enable-nexfi
+
+# 单独测试GPS记录器
+python3 gps.py --drone-id=drone0 --interval=1.0 --time=30 --verbose=true
+
+# 单独测试Nexfi记录器
+python3 nexfi_client.py --nexfi-ip=192.168.104.1 --interval=1.0 --time=30 --verbose=true
+
+# 检查系统监控日志
+tail -f ./logs/system_monitor.jsonl
 ``` 

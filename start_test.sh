@@ -18,6 +18,14 @@ DRONE_ID="drone0"
 GPS_INTERVAL=1.0
 USE_SIM_TIME=false
 
+# Nexfi通信状态记录配置
+ENABLE_NEXFI=false
+NEXFI_IP="192.168.104.1"
+NEXFI_USERNAME="root"
+NEXFI_PASSWORD="nexfi"
+NEXFI_INTERVAL=1.0
+NEXFI_DEVICE="adhoc0"
+
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -67,18 +75,29 @@ show_help() {
     echo "  --gps-interval=SEC       GPS记录间隔(秒) (默认: 1.0)"
     echo "  --use-sim-time           使用仿真时间"
     echo ""
+    echo "Nexfi通信状态记录选项:"
+    echo "  --enable-nexfi           启用Nexfi通信状态记录"
+    echo "  --nexfi-ip=IP            Nexfi服务器IP地址 (默认: 192.168.104.1)"
+    echo "  --nexfi-username=USERNAME Nexfi服务器用户名 (默认: root)"
+    echo "  --nexfi-password=PASSWORD Nexfi服务器密码 (默认: nexfi)"
+    echo "  --nexfi-interval=SEC     Nexfi记录间隔(秒) (默认: 1.0)"
+    echo "  --nexfi-device=DEVICE    Nexfi设备名称 (默认: adhoc0)"
+    echo ""
     echo "  -h, --help               显示帮助信息"
     echo ""
     echo "示例:"
     echo "  $0 sender --local-ip=192.168.104.10 --peer-ip=192.168.104.20"
     echo "  $0 receiver --time=300 --enable-gps"
     echo "  $0 sender --enable-gps --drone-id=drone1 --gps-interval=0.5"
+    echo "  $0 sender --enable-nexfi --nexfi-ip=192.168.104.1"
+    echo "  $0 receiver --enable-gps --enable-nexfi --time=600"
     echo ""
     echo "注意:"
     echo "  - 两台无人机需要在同一网段 (192.168.104.0/24)"
     echo "  - IP地址较小的无人机会自动成为NTP服务器"
     echo "  - 确保两台无人机都能互相ping通"
     echo "  - GPS记录需要ROS2环境和as2_python_api"
+    echo "  - Nexfi状态记录需要requests库和Nexfi设备连接"
 }
 
 # 检查依赖
@@ -130,6 +149,35 @@ check_dependencies() {
         fi
     fi
     
+    # 如果启用Nexfi状态记录，检查Nexfi客户端脚本和依赖
+    if [[ "$ENABLE_NEXFI" == "true" ]]; then
+        if [[ ! -f "nexfi_client.py" ]]; then
+            print_error "找不到 nexfi_client.py (Nexfi状态记录需要)"
+            return 1
+        fi
+        
+        # 检查requests库
+        if ! python3 -c "import requests" &> /dev/null; then
+            print_warning "requests 包未找到，Nexfi状态记录可能无法工作"
+            print_warning "请运行: pip install requests"
+        fi
+        
+        # 测试Nexfi连接
+        print_info "测试Nexfi设备连接 ($NEXFI_IP)..."
+        if timeout 5 python3 -c "
+import requests
+try:
+    response = requests.get('http://$NEXFI_IP', timeout=3)
+    print('Nexfi设备连接正常')
+except:
+    print('Nexfi设备连接失败，将使用模拟数据')
+" 2>/dev/null; then
+            print_success "Nexfi设备连接测试完成"
+        else
+            print_warning "Nexfi设备连接测试失败，将使用模拟数据继续运行"
+        fi
+    fi
+    
     print_success "依赖检查通过"
     return 0
 }
@@ -178,6 +226,15 @@ show_config() {
         echo "GPS记录间隔:  $GPS_INTERVAL 秒"
         echo "使用仿真时间: $USE_SIM_TIME"
     fi
+    echo "Nexfi通信状态记录配置:"
+    echo "启用Nexfi通信状态记录:  $ENABLE_NEXFI"
+    if [[ "$ENABLE_NEXFI" == "true" ]]; then
+        echo "Nexfi服务器IP:     $NEXFI_IP"
+        echo "Nexfi服务器用户名: $NEXFI_USERNAME"
+        echo "Nexfi服务器密码: $NEXFI_PASSWORD"
+        echo "Nexfi记录间隔:  $NEXFI_INTERVAL 秒"
+        echo "Nexfi设备名称: $NEXFI_DEVICE"
+    fi
     echo "=========================================="
     echo ""
 }
@@ -218,6 +275,11 @@ run_test() {
         fi
     fi
     
+    # 添加Nexfi通信状态记录参数
+    if [[ "$ENABLE_NEXFI" == "true" ]]; then
+        cmd="$cmd --enable-nexfi --nexfi-ip=$NEXFI_IP --nexfi-username=$NEXFI_USERNAME --nexfi-password=$NEXFI_PASSWORD --nexfi-interval=$NEXFI_INTERVAL --nexfi-device=$NEXFI_DEVICE"
+    fi
+    
     print_info "执行命令: $cmd"
     echo ""
     
@@ -234,6 +296,14 @@ run_test() {
 
 # 解析命令行参数
 parse_args() {
+    # 检查是否有帮助参数
+    for arg in "$@"; do
+        if [[ "$arg" == "-h" || "$arg" == "--help" ]]; then
+            show_help
+            exit 0
+        fi
+    done
+    
     # 第一个参数必须是模式
     if [[ $# -eq 0 ]]; then
         show_help
@@ -295,6 +365,30 @@ parse_args() {
                 ;;
             --use-sim-time)
                 USE_SIM_TIME=true
+                shift
+                ;;
+            --enable-nexfi)
+                ENABLE_NEXFI=true
+                shift
+                ;;
+            --nexfi-ip=*)
+                NEXFI_IP="${1#*=}"
+                shift
+                ;;
+            --nexfi-username=*)
+                NEXFI_USERNAME="${1#*=}"
+                shift
+                ;;
+            --nexfi-password=*)
+                NEXFI_PASSWORD="${1#*=}"
+                shift
+                ;;
+            --nexfi-interval=*)
+                NEXFI_INTERVAL="${1#*=}"
+                shift
+                ;;
+            --nexfi-device=*)
+                NEXFI_DEVICE="${1#*=}"
                 shift
                 ;;
             -h|--help)

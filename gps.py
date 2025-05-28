@@ -88,7 +88,7 @@ class GPSLogger:
         try:
             with open(self.log_file, 'w', newline='') as csvfile:
                 writer = csv.writer(csvfile)
-                # 使用与UDP测试系统一致的列名格式
+                # 使用与原始文件一致的列名格式
                 writer.writerow([
                     'timestamp',        # 时间戳（Unix时间戳）
                     'latitude',         # 纬度
@@ -99,34 +99,13 @@ class GPSLogger:
                     'local_z',          # 本地坐标Z
                     'connected',        # 连接状态
                     'armed',            # 解锁状态
-                    'offboard',         # Offboard模式状态
-                    'gps_fix_type',     # GPS定位类型
-                    'satellites_used'   # 使用的卫星数量
+                    'offboard'          # Offboard模式状态
                 ])
             if self.verbose:
                 print(f"GPS数据将记录到: {self.log_file}")
         except Exception as e:
             print(f"创建CSV文件时出错: {e}")
             sys.exit(1)
-            
-    def get_gps_status(self) -> Dict[str, Any]:
-        """
-        获取GPS状态信息
-        Returns:
-            包含GPS状态信息的字典
-        """
-        try:
-            # 这里应该是获取GPS状态的实际代码
-            # 由于DroneInterfaceGPS可能没有直接的GPS状态接口，我们使用模拟数据
-            return {
-                "gps_fix_type": 3,      # 3D定位
-                "satellites_used": 12   # 使用的卫星数量
-            }
-        except Exception:
-            return {
-                "gps_fix_type": 0,      # 无定位
-                "satellites_used": 0
-            }
             
     def log_gps_data(self):
         """记录GPS数据到文件（使用Unix时间戳格式）"""
@@ -148,9 +127,6 @@ class GPSLogger:
             armed = info.get('armed', False)
             offboard = info.get('offboard', False)
             
-            # 获取GPS状态
-            gps_status = self.get_gps_status()
-            
             # 写入CSV文件
             with open(self.log_file, 'a', newline='') as csvfile:
                 writer = csv.writer(csvfile)
@@ -159,16 +135,13 @@ class GPSLogger:
                     lat, lon, alt,                             # GPS坐标
                     x, y, z,                                   # 本地坐标
                     connected, armed, offboard,                # 无人机状态
-                    gps_status.get("gps_fix_type", 0),        # GPS定位类型
-                    gps_status.get("satellites_used", 0)       # 卫星数量
                 ])
                 
             # 显示当前数据（格式与UDP测试系统保持一致）
             if self.verbose:
                 print(f"GPS logged at {timestamp:.6f}: "
                       f"GPS({lat:.6f}, {lon:.6f}, {alt:.2f}m) "
-                      f"Local({x:.2f}, {y:.2f}, {z:.2f}m) "
-                      f"Sats: {gps_status.get('satellites_used', 0)}")
+                      f"Local({x:.2f}, {y:.2f}, {z:.2f}m)")
             
         except Exception as e:
             print(f"记录GPS数据时出错: {e}")
