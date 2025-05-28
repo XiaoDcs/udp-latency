@@ -48,7 +48,7 @@ class UDPReceiver:
         # 初始化日志
         with open(self.log_file, 'w', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(["seq_num", "send_timestamp", "recv_timestamp", "delay", "src_ip", "src_port", "packet_size", "rssi"])
+            writer.writerow(["seq_num", "send_timestamp", "recv_timestamp", "delay", "src_ip", "src_port", "packet_size"])
         
         # 记录最近收到的序列号，用于检测丢包
         self.last_seq_num = 0
@@ -67,38 +67,24 @@ class UDPReceiver:
             print(f"Buffer size: {self.buffer_size} bytes")
             print(f"Log file: {self.log_file}")
     
-    def get_drone_status(self) -> Dict[str, Any]:
-        """
-        获取无人机状态信息
-        注意：这是一个占位函数，实际实现需要与无人机系统集成
-        Returns:
-            包含无人机状态信息的字典
-        """
-        # 这里应该是获取通信模块的RSSI或其他关键指标的代码
-        # 实际实现时需要根据具体的硬件接口进行开发
-        return {
-            "rssi": -75,  # 模拟的RSSI值，实际使用时应当从硬件获取
-        }
-    
-    def parse_packet(self, data: bytes) -> Tuple[int, float, int]:
+    def parse_packet(self, data: bytes) -> Tuple[int, float]:
         """
         解析UDP数据包
         Args:
             data: 收到的UDP数据包
         Returns:
-            (序列号, 发送时间戳, RSSI值)
+            (序列号, 发送时间戳)
         """
         # 检查数据包长度是否足够
-        if len(data) < 14:  # 4(seq) + 8(timestamp) + 2(rssi)
-            return 0, 0.0, 0
+        if len(data) < 12:  # 4(seq) + 8(timestamp)
+            return 0, 0.0
         
         # 使用struct解包数据:
         # I: 4字节无符号整数(序列号)
         # d: 8字节双精度浮点数(时间戳)
-        # h: 2字节有符号整数(RSSI)
-        seq_num, send_time, sender_rssi = struct.unpack("!Idh", data[:14])
+        seq_num, send_time = struct.unpack("!Id", data[:12])
         
-        return seq_num, send_time, sender_rssi
+        return seq_num, send_time
     
     def calculate_packet_loss(self, seq_num: int) -> int:
         """
@@ -140,7 +126,7 @@ class UDPReceiver:
                     recv_time = time.time()
                     
                     # 解析数据包
-                    seq_num, send_time, sender_rssi = self.parse_packet(data)
+                    seq_num, send_time = self.parse_packet(data)
                     
                     # 跳过无效数据包
                     if seq_num == 0:
@@ -148,10 +134,6 @@ class UDPReceiver:
                     
                     # 计算延迟(秒)
                     delay = recv_time - send_time
-                    
-                    # 获取接收端无人机状态
-                    drone_status = self.get_drone_status()
-                    rssi = drone_status.get("rssi", 0)
                     
                     # 检查丢包
                     lost_packets = self.calculate_packet_loss(seq_num)
@@ -168,12 +150,12 @@ class UDPReceiver:
                         writer = csv.writer(f)
                         writer.writerow([
                             seq_num, send_time, recv_time, delay,
-                            addr[0], addr[1], len(data), rssi
+                            addr[0], addr[1], len(data)
                         ])
                     
                     # 打印接收信息
                     if self.verbose:
-                        print(f"Received packet #{seq_num} from {addr[0]}:{addr[1]}, delay: {delay:.6f}s, RSSI: {rssi} dBm")
+                        print(f"Received packet #{seq_num} from {addr[0]}:{addr[1]}, delay: {delay:.6f}s")
                 
                 except socket.timeout:
                     # 超时只是为了定期检查是否应该退出循环

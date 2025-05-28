@@ -54,7 +54,7 @@ class UDPSender:
         # 初始化日志
         with open(self.log_file, 'w', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(["seq_num", "timestamp", "packet_size", "rssi"])
+            writer.writerow(["seq_num", "timestamp", "packet_size"])
         
         # 初始化序列号
         self.seq_num = 1
@@ -68,19 +68,6 @@ class UDPSender:
             print(f"Packet size: {self.packet_size} bytes, Frequency: {self.frequency} Hz")
             print(f"Log file: {self.log_file}")
     
-    def get_drone_status(self) -> Dict[str, Any]:
-        """
-        获取无人机状态信息
-        注意：这是一个占位函数，实际实现需要与无人机系统集成
-        Returns:
-            包含无人机状态信息的字典
-        """
-        # 这里应该是获取通信模块的RSSI或其他关键指标的代码
-        # 实际实现时需要根据具体的硬件接口进行开发
-        return {
-            "rssi": -70,  # 模拟的RSSI值，实际使用时应当从硬件获取
-        }
-    
     def create_packet(self) -> bytes:
         """
         创建UDP数据包
@@ -90,16 +77,11 @@ class UDPSender:
         # 获取当前时间戳(秒)
         current_time = time.time()
         
-        # 获取无人机状态
-        drone_status = self.get_drone_status()
-        rssi = drone_status.get("rssi", 0)
-        
         # 创建数据包内容
         # 使用struct来高效打包数据:
         # I: 4字节无符号整数(序列号)
         # d: 8字节双精度浮点数(时间戳)
-        # h: 2字节有符号整数(RSSI)
-        packet_header = struct.pack("!Idh", self.seq_num, current_time, rssi)
+        packet_header = struct.pack("!Id", self.seq_num, current_time)
         
         # 填充剩余空间，确保包大小符合要求
         remaining_size = max(0, self.packet_size - len(packet_header))
@@ -131,17 +113,15 @@ class UDPSender:
                 
                 # 获取当前时间戳和无人机状态
                 send_time = time.time()
-                drone_status = self.get_drone_status()
-                rssi = drone_status.get("rssi", 0)
                 
                 # 记录日志
                 with open(self.log_file, 'a', newline='') as f:
                     writer = csv.writer(f)
-                    writer.writerow([self.seq_num, send_time, bytes_sent, rssi])
+                    writer.writerow([self.seq_num, send_time, bytes_sent])
                 
                 # 打印发送信息
                 if self.verbose:
-                    print(f"Sent packet #{self.seq_num} at {send_time:.6f}, size: {bytes_sent} bytes, RSSI: {rssi} dBm")
+                    print(f"Sent packet #{self.seq_num} at {send_time:.6f}, size: {bytes_sent} bytes")
                 
                 # 增加序列号
                 self.seq_num += 1
