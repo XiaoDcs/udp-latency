@@ -16,7 +16,7 @@ DEFAULT_CONFIG = {
     "local_port": 20002,           # 本地端口
     "remote_ip": "192.168.104.2",  # 接收端IP地址
     "remote_port": 20001,          # 接收端端口
-    "packet_size": 200,            # 数据包大小(字节)
+    "packet_size": 1000,           # 数据包大小(字节)
     "frequency": 10.0,             # 发送频率(Hz)
     "running_time": 60,            # 运行时间(秒)
     "verbose": True,               # 是否打印详细信息
@@ -173,7 +173,7 @@ def parse_args() -> Dict[str, Any]:
                 print("  -p, --local-port=PORT   Local port (default: 20002)")
                 print("  -r, --remote-ip=IP      Remote IP address (default: 192.168.104.2)")
                 print("  -o, --remote-port=PORT  Remote port (default: 20001)")
-                print("  -s, --packet-size=SIZE  Packet size in bytes (default: 200)")
+                print("  -s, --packet-size=SIZE  Packet size in bytes (default: 1000)")
                 print("  -f, --frequency=FREQ    Sending frequency in Hz (default: 10.0)")
                 print("  -t, --time=TIME         Running time in seconds (default: 60)")
                 print("  -v, --verbose=BOOL      Verbose output (default: True)")
