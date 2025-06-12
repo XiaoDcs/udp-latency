@@ -641,6 +641,9 @@ class UDPTestManager:
                 # 发送端GPS记录时间
                 total_gps_time = udp_time + 120  # 额外2分钟用于准备和清理
             
+            # 确保时间参数为整数
+            total_gps_time = int(total_gps_time)
+            
             # 构建GPS记录器命令
             cmd = [
                 'python3', 'gps.py',
@@ -712,6 +715,9 @@ class UDPTestManager:
             else:
                 # 发送端Nexfi记录时间
                 total_nexfi_time = udp_time + 120  # 额外2分钟用于准备和清理
+            
+            # 确保时间参数为整数
+            total_nexfi_time = int(total_nexfi_time)
             
             # 构建Nexfi状态记录器命令
             cmd = [
@@ -869,6 +875,9 @@ class UDPTestManager:
         udp_time = self.config.get('running_time', 60)
         buffer_time = max(60, udp_time * 0.2)  # 至少60秒缓冲，或者20%的额外时间
         total_receiver_time = udp_time + buffer_time
+        
+        # 确保时间参数为整数
+        total_receiver_time = int(total_receiver_time)
         
         self.logger.info(f"Receiver will run for {total_receiver_time}s (UDP: {udp_time}s + buffer: {buffer_time}s)")
         
