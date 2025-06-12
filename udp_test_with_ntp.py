@@ -856,7 +856,9 @@ class UDPTestManager:
             '--packet-size', str(self.config.get('packet_size', 1000)),
             '--frequency', str(self.config.get('frequency', 10)),
             '--time', str(self.config.get('running_time', 60)),
-            '--log-path', self.log_path
+            '--log-path', self.log_path,
+            '--network-retry-delay', str(self.config.get('network_retry_delay', 1.0)),
+            '--log-network-errors', str(self.config.get('log_network_errors', True)),
         ]
         
         try:
@@ -1071,6 +1073,12 @@ def main():
     parser.add_argument('--running-time', type=int, default=60,
                        help='运行时间(秒) (默认: 60)')
     
+    # UDP网络错误处理参数 🆕
+    parser.add_argument('--network-retry-delay', type=float, default=1.0,
+                       help='网络错误重试延迟(秒) (默认: 1.0)')
+    parser.add_argument('--log-network-errors', type=bool, default=True,
+                       help='是否记录网络错误到日志 (默认: True)')
+
     # UDP接收端参数
     parser.add_argument('--buffer-size', type=int, default=1500,
                        help='缓冲区大小(字节) (默认: 1500)')
@@ -1135,6 +1143,8 @@ def main():
         'enable_ntp': not args.skip_ntp,  # 默认启用NTP，除非明确跳过
         'ntp_peer_ip': args.ntp_peer_ip or args.peer_ip,  # 默认使用peer_ip
         'skip_ntp_config': args.skip_ntp_config,
+        'network_retry_delay': args.network_retry_delay,
+        'log_network_errors': args.log_network_errors,
     }
     
     # 调整接收端的端口配置

@@ -21,6 +21,8 @@ DEFAULT_CONFIG = {
     "running_time": 60,            # 运行时间(秒)
     "verbose": True,               # 是否打印详细信息
     "log_path": "./logs",          # 日志保存路径
+    "network_retry_delay": 1.0,    # 网络错误重试延迟(秒)
+    "log_network_errors": True,    # 是否记录网络错误到日志
 }
 
 class UDPSender:
@@ -43,6 +45,8 @@ class UDPSender:
         self.running_time = config.get("running_time", DEFAULT_CONFIG["running_time"])
         self.verbose = config.get("verbose", DEFAULT_CONFIG["verbose"])
         self.log_path = config.get("log_path", DEFAULT_CONFIG["log_path"])
+        self.network_retry_delay = config.get("network_retry_delay", DEFAULT_CONFIG["network_retry_delay"])
+        self.log_network_errors = config.get("log_network_errors", DEFAULT_CONFIG["log_network_errors"])
         
         # 确保日志目录存在
         os.makedirs(self.log_path, exist_ok=True)
@@ -54,10 +58,14 @@ class UDPSender:
         # 初始化日志
         with open(self.log_file, 'w', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(["seq_num", "timestamp", "packet_size"])
+            writer.writerow(["seq_num", "timestamp", "packet_size_or_error"])
         
         # 初始化序列号
         self.seq_num = 1
+        
+        # 统计信息
+        self.successful_sends = 0
+        self.network_errors = 0
         
         # 创建UDP socket
         self._udp_socket = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
@@ -107,24 +115,54 @@ class UDPSender:
                 # 发送开始时间
                 start_loop = time.time()
                 
-                # 创建并发送数据包
-                packet = self.create_packet()
-                bytes_sent = self._udp_socket.sendto(packet, (self.remote_ip, self.remote_port))
-                
-                # 获取当前时间戳和无人机状态
-                send_time = time.time()
-                
-                # 记录日志
-                with open(self.log_file, 'a', newline='') as f:
-                    writer = csv.writer(f)
-                    writer.writerow([self.seq_num, send_time, bytes_sent])
-                
-                # 打印发送信息
-                if self.verbose:
-                    print(f"Sent packet #{self.seq_num} at {send_time:.6f}, size: {bytes_sent} bytes")
-                
-                # 增加序列号
-                self.seq_num += 1
+                try:
+                    # 创建并发送数据包
+                    packet = self.create_packet()
+                    bytes_sent = self._udp_socket.sendto(packet, (self.remote_ip, self.remote_port))
+                    
+                    # 获取当前时间戳和无人机状态
+                    send_time = time.time()
+                    
+                    # 记录日志
+                    with open(self.log_file, 'a', newline='') as f:
+                        writer = csv.writer(f)
+                        writer.writerow([self.seq_num, send_time, bytes_sent])
+                    
+                    # 打印发送信息
+                    if self.verbose:
+                        print(f"Sent packet #{self.seq_num} at {send_time:.6f}, size: {bytes_sent} bytes")
+                    
+                    # 增加序列号
+                    self.seq_num += 1
+                    
+                    # 统计成功发送
+                    self.successful_sends += 1
+                    
+                except OSError as e:
+                    # 处理网络相关错误（如Network is unreachable）
+                    error_time = time.time()
+                    error_msg = f"Network error for packet #{self.seq_num}: {e}"
+                    
+                    if self.verbose:
+                        print(f"⚠️  {error_msg}")
+                    
+                    # 记录网络错误到日志（如果启用）
+                    if self.log_network_errors:
+                        with open(self.log_file, 'a', newline='') as f:
+                            writer = csv.writer(f)
+                            writer.writerow([self.seq_num, error_time, f"ERROR: {e}"])
+                    
+                    # 增加序列号（即使发送失败也要继续计数）
+                    self.seq_num += 1
+                    
+                    # 统计网络错误
+                    self.network_errors += 1
+                    
+                    # 网络错误时等待一段时间再重试
+                    if self.verbose:
+                        print(f"⏳ Waiting {self.network_retry_delay}s before retry...")
+                    time.sleep(self.network_retry_delay)
+                    continue
                 
                 # 计算发送耗时，调整等待时间以保持频率
                 elapsed = time.time() - start_loop
@@ -133,11 +171,25 @@ class UDPSender:
                     time.sleep(sleep_time)
             
             if self.verbose:
-                print(f"Transmission completed. Sent {self.seq_num-1} packets.")
-                print(f"Log saved to {self.log_file}")
+                total_attempts = self.seq_num - 1
+                success_rate = (self.successful_sends / total_attempts * 100) if total_attempts > 0 else 0
+                print(f"\n📊 Transmission completed!")
+                print(f"   Total attempts: {total_attempts}")
+                print(f"   Successful sends: {self.successful_sends}")
+                print(f"   Network errors: {self.network_errors}")
+                print(f"   Success rate: {success_rate:.1f}%")
+                print(f"   Log saved to {self.log_file}")
         
         except KeyboardInterrupt:
-            print("\nTransmission interrupted by user.")
+            if self.verbose:
+                total_attempts = self.seq_num - 1
+                success_rate = (self.successful_sends / total_attempts * 100) if total_attempts > 0 else 0
+                print(f"\n⚡ Transmission interrupted by user!")
+                print(f"   Total attempts: {total_attempts}")
+                print(f"   Successful sends: {self.successful_sends}")
+                print(f"   Network errors: {self.network_errors}")
+                print(f"   Success rate: {success_rate:.1f}%")
+                print(f"   Log saved to {self.log_file}")
         finally:
             self._udp_socket.close()
     
