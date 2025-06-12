@@ -12,6 +12,11 @@ PACKET_SIZE=200
 RUNNING_TIME=60
 BUFFER_SIZE=1500
 
+# NTP时间同步配置
+ENABLE_NTP=true
+NTP_PEER_IP=""
+SKIP_NTP_CONFIG=false
+
 # GPS记录相关配置
 ENABLE_GPS=false
 DRONE_ID="drone0"
@@ -62,12 +67,17 @@ show_help() {
     echo ""
     echo "选项:"
     echo "  --local-ip=IP            本地IP地址 (默认: 192.168.104.10)"
-    echo "  --peer-ip=IP             对方IP地址 (默认: 192.168.104.20)"
+    echo "  --peer-ip=IP             对方IP地址，用于UDP通信 (默认: 192.168.104.20)"
     echo "  --log-path=PATH          日志保存路径 (默认: ./logs)"
     echo "  --frequency=FREQ         发送频率(Hz) (默认: 10)"
     echo "  --packet-size=SIZE       数据包大小(字节) (默认: 1000)"
     echo "  --time=TIME              运行时间(秒) (默认: 60)"
     echo "  --buffer-size=SIZE       缓冲区大小(字节) (默认: 1500)"
+    echo ""
+    echo "NTP时间同步选项:"
+    echo "  --skip-ntp               完全跳过NTP时间同步功能"
+    echo "  --ntp-peer-ip=IP         NTP对时的对方IP地址 (默认使用--peer-ip的值)"
+    echo "  --skip-ntp-config        跳过chrony配置，使用现有配置"
     echo ""
     echo "GPS记录选项:"
     echo "  --enable-gps             启用GPS数据记录"
@@ -91,11 +101,14 @@ show_help() {
     echo "  $0 sender --enable-gps --drone-id=drone1 --gps-interval=0.5"
     echo "  $0 sender --enable-nexfi --nexfi-ip=192.168.104.1"
     echo "  $0 receiver --enable-gps --enable-nexfi --time=600"
+    echo "  $0 sender --skip-ntp --peer-ip=192.168.104.20"
+    echo "  $0 receiver --ntp-peer-ip=192.168.104.30 --peer-ip=192.168.104.20"
     echo ""
     echo "注意:"
-    echo "  - 两台无人机需要在同一网段 (192.168.104.0/24)"
-    echo "  - IP地址较小的无人机会自动成为NTP服务器"
-    echo "  - 确保两台无人机都能互相ping通"
+    echo "  - 两台无人机需要在同一网段内能够相互通信"
+    echo "  - 默认启用NTP时间同步，IP地址较小的无人机会自动成为NTP服务器"
+    echo "  - 可以使用--skip-ntp跳过NTP时间同步，直接进行UDP通信测试"
+    echo "  - NTP对时IP可以与UDP通信IP不同，使用--ntp-peer-ip单独指定"
     echo "  - GPS记录需要ROS2环境和as2_python_api"
     echo "  - Nexfi状态记录需要requests库和Nexfi设备连接"
 }
@@ -219,6 +232,17 @@ show_config() {
         echo "最长运行时间: $RUNNING_TIME 秒"
     fi
     echo ""
+    echo "NTP时间同步配置:"
+    echo "启用NTP同步:  $ENABLE_NTP"
+    if [[ "$ENABLE_NTP" == "true" ]]; then
+        if [[ -n "$NTP_PEER_IP" ]]; then
+            echo "NTP对时IP:    $NTP_PEER_IP"
+        else
+            echo "NTP对时IP:    $PEER_IP (使用通信IP)"
+        fi
+        echo "跳过NTP配置:  $SKIP_NTP_CONFIG"
+    fi
+    echo ""
     echo "GPS记录配置:"
     echo "启用GPS记录:  $ENABLE_GPS"
     if [[ "$ENABLE_GPS" == "true" ]]; then
@@ -265,6 +289,18 @@ run_test() {
         cmd="$cmd --frequency=$FREQUENCY --packet-size=$PACKET_SIZE --running-time=$RUNNING_TIME"
     else
         cmd="$cmd --buffer-size=$BUFFER_SIZE --running-time=$RUNNING_TIME"
+    fi
+    
+    # 添加NTP参数
+    if [[ "$ENABLE_NTP" == "false" ]]; then
+        cmd="$cmd --skip-ntp"
+    else
+        if [[ -n "$NTP_PEER_IP" ]]; then
+            cmd="$cmd --ntp-peer-ip=$NTP_PEER_IP"
+        fi
+        if [[ "$SKIP_NTP_CONFIG" == "true" ]]; then
+            cmd="$cmd --skip-ntp-config"
+        fi
     fi
     
     # 添加GPS记录参数
@@ -349,6 +385,18 @@ parse_args() {
                 ;;
             --buffer-size=*)
                 BUFFER_SIZE="${1#*=}"
+                shift
+                ;;
+            --skip-ntp)
+                ENABLE_NTP=false
+                shift
+                ;;
+            --ntp-peer-ip=*)
+                NTP_PEER_IP="${1#*=}"
+                shift
+                ;;
+            --skip-ntp-config)
+                SKIP_NTP_CONFIG=true
                 shift
                 ;;
             --enable-gps)

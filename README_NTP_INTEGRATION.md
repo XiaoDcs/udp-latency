@@ -1,6 +1,12 @@
 # 无人机UDP通信测试系统 - 集成NTP时间同步
 
-## 📋 最新功能更新 (v2.1)
+## 📋 最新功能更新 (v2.2) 🆕
+
+### 🎛️ 灵活的NTP配置选项
+- **可选NTP对时**: 新增 `--skip-ntp` 参数，可完全跳过NTP时间同步功能
+- **独立NTP IP**: 新增 `--ntp-peer-ip` 参数，支持NTP对时IP与UDP通信IP分离
+- **默认行为**: 默认启用NTP对时，向下兼容现有配置
+- **使用场景**: 适合已有精确时间源的环境或测试纯UDP性能的场景
 
 ### 🔧 时间同步验证修复
 - **修复问题**: 解决了chrony复合偏移量格式解析错误，如 `-3069ns[+1489us]` 格式
@@ -58,6 +64,8 @@ source venv/bin/activate
 
 ### 3. 立即开始测试
 
+#### 基本测试（包含NTP时间同步）
+
 **在第一台无人机上（发送端）：**
 ```bash
 source venv/bin/activate
@@ -68,6 +76,36 @@ source venv/bin/activate
 ```bash
 source venv/bin/activate
 ./start_test.sh receiver
+```
+
+#### 跳过NTP时间同步的纯UDP测试
+
+**在第一台无人机上（发送端）：**
+```bash
+source venv/bin/activate
+./start_test.sh sender --skip-ntp
+```
+
+**在第二台无人机上（接收端）：**
+```bash
+source venv/bin/activate
+./start_test.sh receiver --skip-ntp
+```
+
+#### 使用独立的NTP对时IP
+
+**场景**: UDP通信使用192.168.104.x网段，NTP对时使用192.168.1.x网段
+
+**在第一台无人机上（发送端）：**
+```bash
+source venv/bin/activate
+./start_test.sh sender --peer-ip=192.168.104.20 --ntp-peer-ip=192.168.1.20
+```
+
+**在第二台无人机上（接收端）：**
+```bash
+source venv/bin/activate
+./start_test.sh receiver --peer-ip=192.168.104.10 --ntp-peer-ip=192.168.1.10
 ```
 
 ### 4. 如需GPS记录功能
@@ -94,6 +132,7 @@ source /opt/ros/humble/setup.bash
 ## 主要特性
 
 - ✅ **一键部署**: 运行setup.sh即可完成环境配置
+- ✅ **灵活的NTP配置**: 支持启用/禁用NTP对时，支持独立NTP对时IP 🆕
 - ✅ **自动时间同步**: 基于IP地址自动确定NTP服务器/客户端角色
 - ✅ **无需地面站**: 两台无人机自主完成时间同步
 - ✅ **一键启动**: 简化的启动脚本，自动化整个测试流程
@@ -105,6 +144,7 @@ source /opt/ros/humble/setup.bash
 
 ## 系统架构
 
+### 标准模式（启用NTP对时）
 ```
 无人机A (192.168.104.10)          无人机B (192.168.104.20)
     ↓                                    ↓
@@ -117,7 +157,24 @@ source /opt/ros/humble/setup.bash
 运行UDP发送端/接收端           ←→    运行UDP接收端/发送端
     ↓                                    ↓
 记录测试日志和GPS轨迹          ←→    记录测试日志和GPS轨迹
-记录通信状态和链路质量          ←→    记录通信状态和链路质量
+```
+
+### 分离模式（NTP对时IP与通信IP不同）🆕
+```
+无人机A                               无人机B
+├─ UDP通信: 192.168.104.10      ←→    ├─ UDP通信: 192.168.104.20
+└─ NTP对时: 192.168.1.10        ←→    └─ NTP对时: 192.168.1.20
+```
+
+### 纯UDP模式（跳过NTP对时）🆕
+```
+无人机A (192.168.104.10)          无人机B (192.168.104.20)
+    ↓                                    ↓
+跳过NTP时间同步                ←→    跳过NTP时间同步
+    ↓                                    ↓
+直接启动GPS记录器              ←→    直接启动GPS记录器
+    ↓                                    ↓
+运行UDP发送端/接收端           ←→    运行UDP接收端/发送端
 ```
 
 ## 文件结构
@@ -173,7 +230,7 @@ gps.py                 # GPS数据记录器
 
 ### 运行测试
 
-#### 基本测试（不含GPS记录）
+#### 基本测试（默认启用NTP对时）
 
 **无人机A (192.168.104.10) - 发送端**
 ```bash
@@ -185,6 +242,50 @@ source venv/bin/activate
 ```bash
 source venv/bin/activate
 ./start_test.sh receiver --local-ip=192.168.104.20 --peer-ip=192.168.104.10
+```
+
+#### 跳过NTP对时的纯UDP测试 🆕
+
+**使用场景**: 
+- 已有其他时间同步机制
+- 测试纯UDP性能，不需要精确时间同步
+- 临时测试或故障排除
+
+**无人机A (192.168.104.10) - 发送端**
+```bash
+source venv/bin/activate
+./start_test.sh sender --local-ip=192.168.104.10 --peer-ip=192.168.104.20 --skip-ntp
+```
+
+**无人机B (192.168.104.20) - 接收端**
+```bash
+source venv/bin/activate
+./start_test.sh receiver --local-ip=192.168.104.20 --peer-ip=192.168.104.10 --skip-ntp
+```
+
+#### 使用独立NTP对时IP 🆕
+
+**使用场景**:
+- UDP通信网络与管理网络分离
+- 多网卡环境，不同网卡承担不同功能
+- 网络安全要求，时间同步使用专用网络
+
+**无人机A - 发送端**
+```bash
+source venv/bin/activate
+./start_test.sh sender \
+  --local-ip=192.168.104.10 \
+  --peer-ip=192.168.104.20 \
+  --ntp-peer-ip=192.168.1.20
+```
+
+**无人机B - 接收端**
+```bash
+source venv/bin/activate
+./start_test.sh receiver \
+  --local-ip=192.168.104.20 \
+  --peer-ip=192.168.104.10 \
+  --ntp-peer-ip=192.168.1.10
 ```
 
 #### 完整测试（含GPS记录）
@@ -215,19 +316,80 @@ source venv/bin/activate
 ./start_test.sh receiver --local-ip=192.168.104.20 --peer-ip=192.168.104.10 --enable-nexfi --nexfi-ip=192.168.104.1
 ```
 
-#### 全功能测试（GPS + Nexfi + UDP）
+#### 全功能测试（GPS + Nexfi + UDP，跳过NTP）🆕
+
+**场景**: 在已有精确时间同步的环境中进行全功能测试
 
 **无人机A (192.168.104.10) - 发送端**
 ```bash
 source venv/bin/activate
-./start_test.sh sender --local-ip=192.168.104.10 --peer-ip=192.168.104.20 --enable-gps --drone-id=drone0 --enable-nexfi --nexfi-ip=192.168.104.1 --time=300
+./start_test.sh sender \
+  --local-ip=192.168.104.10 \
+  --peer-ip=192.168.104.20 \
+  --enable-gps \
+  --drone-id=drone0 \
+  --enable-nexfi \
+  --nexfi-ip=192.168.104.1 \
+  --time=300 \
+  --skip-ntp
 ```
 
 **无人机B (192.168.104.20) - 接收端**
 ```bash
 source venv/bin/activate
-./start_test.sh receiver --local-ip=192.168.104.20 --peer-ip=192.168.104.10 --enable-gps --drone-id=drone1 --enable-nexfi --nexfi-ip=192.168.104.1 --time=300
+./start_test.sh receiver \
+  --local-ip=192.168.104.20 \
+  --peer-ip=192.168.104.10 \
+  --enable-gps \
+  --drone-id=drone1 \
+  --enable-nexfi \
+  --nexfi-ip=192.168.104.1 \
+  --time=300 \
+  --skip-ntp
 ```
+
+#### 高级配置示例 🆕
+
+**复杂网络环境配置**:
+```bash
+source venv/bin/activate
+./start_test.sh sender \
+  --local-ip=192.168.104.10 \         # UDP通信IP
+  --peer-ip=192.168.104.20 \          # UDP通信对方IP
+  --ntp-peer-ip=10.0.0.20 \          # NTP对时专用IP
+  --enable-gps \
+  --drone-id=drone_alpha \
+  --enable-nexfi \
+  --nexfi-ip=172.16.1.1 \            # Nexfi管理IP
+  --time=600 \
+  --frequency=20 \
+  --packet-size=1400
+```
+
+## 新增命令行参数详解 🆕
+
+### NTP相关参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `--skip-ntp` | flag | false | 完全跳过NTP时间同步功能 |
+| `--ntp-peer-ip` | string | 使用--peer-ip的值 | NTP对时的对方IP地址 |
+| `--skip-ntp-config` | flag | false | 跳过chrony配置，使用现有配置 |
+
+### 使用场景说明
+
+#### 何时使用 `--skip-ntp`
+- ✅ 系统已有其他时间同步机制（如GPS时钟、PTP等）
+- ✅ 测试纯UDP性能，不关心时间戳精度
+- ✅ 临时测试或故障排除
+- ✅ 不具备sudo权限配置chrony
+- ❌ 需要精确测量网络延迟时
+
+#### 何时使用 `--ntp-peer-ip`
+- ✅ 多网卡环境，管理网络与数据网络分离
+- ✅ 安全要求，时间同步使用专用安全网络
+- ✅ 网络拓扑复杂，最优路由不同
+- ✅ 带宽管理，避免NTP流量影响数据传输
 
 ## 日志文件说明
 
@@ -278,11 +440,26 @@ timestamp,mesh_enabled,channel,frequency_band,tx_power,work_mode,node_id,connect
 1640995201.123456,True,149,20,20,adhoc,1,2,-66.1,24.8,44.8,16%,43%,2h 30m,v1.0.0,3,179.2
 ```
 
-**系统监控日志 (JSON Lines)**:
+**系统监控日志 (JSON Lines)** 🆕:
 ```json
-{"timestamp": "2021-12-31T12:00:00.123456", "ntp_role": "client", "ntp_synced": true, "ntp_offset_ms": 2.3, "gps_logger_status": "running", "enable_gps": true, "nexfi_logger_status": "running", "enable_nexfi": true}
-{"timestamp": "2021-12-31T12:00:10.123456", "ntp_role": "client", "ntp_synced": true, "ntp_offset_ms": 1.8, "gps_logger_status": "running", "enable_gps": true, "nexfi_logger_status": "running", "enable_nexfi": true}
+{"timestamp": "2021-12-31T12:00:00.123456", "ntp_enabled": true, "ntp_role": "client", "ntp_synced": true, "ntp_offset_ms": 2.3, "gps_logger_status": "running", "enable_gps": true, "nexfi_logger_status": "running", "enable_nexfi": true}
+{"timestamp": "2021-12-31T12:00:10.123456", "ntp_enabled": true, "ntp_role": "client", "ntp_synced": true, "ntp_offset_ms": 1.8, "gps_logger_status": "running", "enable_gps": true, "nexfi_logger_status": "running", "enable_nexfi": true}
+{"timestamp": "2021-12-31T12:00:20.123456", "ntp_enabled": false, "ntp_role": null, "ntp_synced": null, "ntp_offset_ms": null, "gps_logger_status": "running", "enable_gps": true, "nexfi_logger_status": "stopped", "enable_nexfi": false}
 ```
+
+**系统监控日志字段说明** 🆕:
+
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| timestamp | string | ISO格式时间戳 |
+| ntp_enabled | bool | 是否启用NTP时间同步 |
+| ntp_role | string/null | NTP角色 ("server"/"client"/null) |
+| ntp_synced | bool/null | NTP同步状态 (启用NTP时) |
+| ntp_offset_ms | float/null | 时间偏移量毫秒 (启用NTP时) |
+| gps_logger_status | string | GPS记录器状态 ("running"/"stopped") |
+| enable_gps | bool | 是否启用GPS记录 |
+| nexfi_logger_status | string | Nexfi记录器状态 ("running"/"stopped") |
+| enable_nexfi | bool | 是否启用Nexfi状态记录 |
 
 ## GPS记录功能详解
 
@@ -695,9 +872,9 @@ print(correlation)
 
 ## 注意事项
 
-1. **sudo权限**: 配置NTP需要sudo权限
+1. **sudo权限**: 配置NTP需要sudo权限（使用--skip-ntp时不需要）🆕
 2. **网络稳定**: 确保测试期间网络连接稳定
-3. **时间同步**: 测试前确保时间同步成功
+3. **时间同步**: 测试前确保时间同步成功（启用NTP时）🆕
 4. **防火墙**: 确保相关端口未被防火墙阻止
 5. **系统负载**: 避免在高负载时进行测试
 6. **ROS2环境**: GPS记录需要正确配置的ROS2环境
@@ -705,6 +882,149 @@ print(correlation)
 8. **存储空间**: 确保有足够空间存储日志文件
 9. **Nexfi设备**: 确保Nexfi设备正常工作并可访问
 10. **网络权限**: Nexfi API访问需要正确的用户名和密码
+11. **多网卡环境**: 使用--ntp-peer-ip时确保NTP网络路由正确 🆕
+
+## 新功能测试示例 🆕
+
+### 测试场景1: 跳过NTP对时的快速UDP测试
+
+**适用情况**: 系统已有其他时间同步机制，或只需测试UDP性能
+
+```bash
+# 无人机A - 发送端
+source venv/bin/activate
+./start_test.sh sender --skip-ntp --time=120 --frequency=20 --packet-size=1400
+
+# 无人机B - 接收端
+source venv/bin/activate
+./start_test.sh receiver --skip-ntp --time=120
+```
+
+**预期结果**: 
+- 跳过所有NTP配置步骤
+- 直接开始UDP通信测试
+- 系统监控日志中 `ntp_enabled` 为 `false`
+
+### 测试场景2: 双网卡环境（管理网络+数据网络）
+
+**网络配置**:
+- 管理网络: 192.168.1.x (用于NTP时间同步)
+- 数据网络: 192.168.104.x (用于UDP通信)
+
+```bash
+# 无人机A - 发送端
+source venv/bin/activate
+./start_test.sh sender \
+  --local-ip=192.168.104.10 \
+  --peer-ip=192.168.104.20 \
+  --ntp-peer-ip=192.168.1.20 \
+  --time=300
+
+# 无人机B - 接收端
+source venv/bin/activate
+./start_test.sh receiver \
+  --local-ip=192.168.104.20 \
+  --peer-ip=192.168.104.10 \
+  --ntp-peer-ip=192.168.1.10 \
+  --time=300
+```
+
+**预期结果**:
+- NTP同步通过192.168.1.x网络
+- UDP通信通过192.168.104.x网络
+- 两个网络可以独立优化和管理
+
+### 测试场景3: 验证NTP参数功能
+
+**步骤1**: 运行标准NTP同步测试
+```bash
+# 记录标准模式的时间偏移量
+./start_test.sh sender --time=60 > standard_ntp.log 2>&1
+```
+
+**步骤2**: 运行跳过NTP的测试
+```bash
+# 记录跳过NTP模式的性能
+./start_test.sh sender --skip-ntp --time=60 > skip_ntp.log 2>&1
+```
+
+**步骤3**: 比较结果
+```bash
+# 查看NTP状态差异
+grep "NTP" standard_ntp.log skip_ntp.log
+grep "跳过" standard_ntp.log skip_ntp.log
+
+# 检查系统监控日志差异
+tail -5 logs/system_monitor.jsonl | jq '.ntp_enabled'
+```
+
+### 测试场景4: 故障排除模式
+
+**模拟网络问题时的测试**:
+```bash
+# 在网络不稳定时使用跳过NTP模式继续测试
+./start_test.sh sender --skip-ntp --enable-gps --time=180
+
+# 或者使用备用网络进行NTP同步
+./start_test.sh sender \
+  --peer-ip=192.168.104.20 \
+  --ntp-peer-ip=10.0.0.20 \
+  --time=180
+```
+
+### 验证新功能的检查清单
+
+#### ✅ 测试 `--skip-ntp` 参数
+- [ ] 确认跳过了所有NTP配置步骤
+- [ ] 确认系统监控日志中 `ntp_enabled` 为 `false`
+- [ ] 确认UDP测试正常进行
+- [ ] 确认不需要sudo权限
+
+#### ✅ 测试 `--ntp-peer-ip` 参数
+- [ ] 确认NTP同步使用指定的IP地址
+- [ ] 确认UDP通信使用不同的IP地址
+- [ ] 确认时间同步成功
+- [ ] 确认网络流量分离
+
+#### ✅ 测试向下兼容性
+- [ ] 确认不使用新参数时行为不变
+- [ ] 确认现有脚本和配置文件仍然工作
+- [ ] 确认日志格式向下兼容
+
+#### ✅ 测试错误处理
+- [ ] 测试NTP网络不可达时的行为
+- [ ] 测试无效IP地址的处理
+- [ ] 测试参数冲突的处理
+
+### 快速功能验证脚本
+
+创建一个快速验证脚本 `test_new_features.sh`:
+
+```bash
+#!/bin/bash
+echo "=== 测试新NTP功能 ==="
+
+echo "1. 测试跳过NTP功能..."
+timeout 30 ./start_test.sh sender --skip-ntp --time=10 &
+wait
+echo "✓ 跳过NTP测试完成"
+
+echo "2. 测试独立NTP IP功能..."
+timeout 30 ./start_test.sh sender --ntp-peer-ip=192.168.1.20 --time=10 &
+wait
+echo "✓ 独立NTP IP测试完成"
+
+echo "3. 检查系统监控日志..."
+if [ -f "logs/system_monitor.jsonl" ]; then
+    echo "最新监控记录:"
+    tail -1 logs/system_monitor.jsonl | jq '.'
+    echo "✓ 监控日志格式正确"
+else
+    echo "⚠ 监控日志文件未找到"
+fi
+
+echo "=== 测试完成 ==="
+```
 
 ## 技术支持
 
@@ -714,124 +1034,9 @@ print(correlation)
 - 测试日志: `./logs/`
 - ROS2日志: `~/.ros/log/`
 
-或者联系技术支持团队。
+对于新功能相关的问题：
+- NTP跳过功能: 检查 `system_monitor.jsonl` 中的 `ntp_enabled` 字段
+- 独立NTP IP: 检查网络路由和连通性
+- 参数兼容性: 查看详细的错误日志
 
-### 启动脚本参数
-
-```bash
-./start_test.sh [模式] [选项]
-```
-
-**模式:**
-- `sender`: 运行发送端
-- `receiver`: 运行接收端
-
-**基本选项:**
-- `--local-ip=IP`: 本地IP地址 (默认: 192.168.104.10)
-- `--peer-ip=IP`: 对方IP地址 (默认: 192.168.104.20)
-- `--log-path=PATH`: 日志保存路径 (默认: ./logs)
-- `--frequency=FREQ`: 发送频率(Hz) (默认: 10)
-- `--packet-size=SIZE`: 数据包大小(字节) (默认: 1000)
-- `--time=TIME`: 运行时间(秒) (默认: 60)
-- `--buffer-size=SIZE`: 缓冲区大小(字节) (默认: 1500)
-
-**GPS记录选项:**
-- `--enable-gps`: 启用GPS数据记录
-- `--drone-id=ID`: 无人机命名空间 (默认: drone0)
-- `--gps-interval=SEC`: GPS记录间隔(秒) (默认: 1.0)
-- `--use-sim-time`: 使用仿真时间
-
-**Nexfi通信状态记录选项:**
-- `--enable-nexfi`: 启用Nexfi通信状态记录
-- `--nexfi-ip=IP`: Nexfi设备IP地址 (默认: 192.168.104.1)
-- `--nexfi-username=USERNAME`: Nexfi登录用户名 (默认: root)
-- `--nexfi-password=PASSWORD`: Nexfi登录密码 (默认: nexfi)
-- `--nexfi-interval=SEC`: Nexfi记录间隔(秒) (默认: 1.0)
-- `--nexfi-device=DEVICE`: 网络设备名称 (默认: adhoc0)
-
-### 测试流程
-
-1. **依赖检查**: 自动检查Python3、必要脚本文件、ROS2环境(如启用GPS)、requests库(如启用Nexfi)
-2. **网络检查**: 验证网络连接和对方无人机可达性
-3. **配置确认**: 显示测试配置，等待用户确认
-4. **时间同步**: 自动安装chrony，配置NTP，建立时间同步
-5. **GPS记录**: 启动GPS数据记录器(如启用)
-6. **Nexfi记录**: 启动Nexfi通信状态记录器(如启用)
-7. **状态监控**: 启动后台监控线程，持续记录同步状态
-8. **UDP测试**: 运行UDP发送/接收测试
-9. **结果保存**: 保存所有日志文件到指定目录
-
-### 示例用法
-
-#### 基本测试 (60秒，10Hz)
-```bash
-# 无人机A
-source venv/bin/activate
-./start_test.sh sender
-
-# 无人机B  
-source venv/bin/activate
-./start_test.sh receiver
-```
-
-#### 长时间测试 (5分钟，20Hz，含GPS)
-```bash
-# 无人机A
-source venv/bin/activate
-./start_test.sh sender --frequency=20 --time=300 --enable-gps
-
-# 无人机B
-source venv/bin/activate
-./start_test.sh receiver --time=300 --enable-gps
-```
-
-#### 高频GPS记录测试 (0.5秒间隔)
-```bash
-# 无人机A
-source venv/bin/activate
-./start_test.sh sender --enable-gps --gps-interval=0.5 --drone-id=drone_a
-
-# 无人机B
-source venv/bin/activate
-./start_test.sh receiver --enable-gps --gps-interval=0.5 --drone-id=drone_b
-```
-
-#### 仿真环境测试
-```bash
-# 无人机A
-source venv/bin/activate
-./start_test.sh sender --enable-gps --use-sim-time --drone-id=drone0
-
-# 无人机B
-source venv/bin/activate
-./start_test.sh receiver --enable-gps --use-sim-time --drone-id=drone1
-```
-
-#### 自定义IP地址和GPS配置
-```bash
-# 无人机A (192.168.1.100)
-source venv/bin/activate
-./start_test.sh sender --local-ip=192.168.1.100 --peer-ip=192.168.1.101 --enable-gps --drone-id=uav_alpha
-
-# 无人机B (192.168.1.101)
-source venv/bin/activate
-./start_test.sh receiver --local-ip=192.168.1.101 --peer-ip=192.168.1.100 --enable-gps --drone-id=uav_beta
-```
-
-### 调试模式
-
-如果需要更详细的调试信息，可以直接运行Python脚本：
-
-```bash
-# 启用详细日志
-python3 udp_test_with_ntp.py --mode=sender --local-ip=192.168.104.10 --peer-ip=192.168.104.20 --enable-gps --enable-nexfi
-
-# 单独测试GPS记录器
-python3 gps.py --drone-id=drone0 --interval=1.0 --time=30 --verbose=true
-
-# 单独测试Nexfi记录器
-python3 nexfi_client.py --nexfi-ip=192.168.104.1 --interval=1.0 --time=30 --verbose=true
-
-# 检查系统监控日志
-tail -f ./logs/system_monitor.jsonl
-``` 
+或者联系技术支持团队。 

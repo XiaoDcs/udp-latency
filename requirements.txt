@@ -37,6 +37,10 @@ python-dateutil>=2.8.0
 # 数据验证 - Data Validation
 jsonschema>=3.2.0      # JSON数据验证
 
+# python 相关
+pydantic
+pymap3d
+
 # 命令行工具增强 - Enhanced CLI Tools
 colorama>=0.4.4        # 跨平台彩色输出
 tqdm>=4.60.0           # 进度条显示
