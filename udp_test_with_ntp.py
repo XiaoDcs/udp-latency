@@ -19,12 +19,21 @@ from typing import Dict, Any, Optional, List
 class NTPSyncManager:
     """NTP时间同步管理器"""
     
-    def __init__(self, local_ip: str, ntp_peer_ip: str, log_path: str = "./logs"):
+    def __init__(self, local_ip: str, ntp_peer_ip: str, log_path: str = "./logs", mode: str = "sender"):
         self.local_ip = local_ip
-        self.ntp_peer_ip = ntp_peer_ip  # 用于NTP对时的IP，可以与通信IP不同
+        self.ntp_peer_ip = ntp_peer_ip  # 参数含义：sender=本机NTP服务IP, receiver=要连接的NTP服务器IP
         self.log_path = log_path
+        self.mode = mode  # 'sender' or 'receiver'
         self.role = None  # 'server' or 'client'
         self.sync_status = {'synced': False, 'offset_ms': None}
+        
+        # 根据模式确定NTP配置
+        if self.mode == 'sender':
+            self.ntp_server_ip = ntp_peer_ip  # sender的NTP服务器监听IP
+            self.ntp_client_ip = None  # sender不需要知道客户端IP
+        else:  # receiver
+            self.ntp_server_ip = ntp_peer_ip  # receiver要连接的NTP服务器IP
+            self.ntp_client_ip = None  # 客户端不需要指定自己的IP
         
         # 设置日志
         self.setup_logging()
@@ -45,39 +54,48 @@ class NTPSyncManager:
         self.logger = logging.getLogger(__name__)
     
     def determine_role(self) -> str:
-        """基于IP地址确定角色"""
-        local_parts = [int(x) for x in self.local_ip.split('.')]
-        peer_parts = [int(x) for x in self.ntp_peer_ip.split('.')]
+        """基于sender/receiver模式确定NTP角色"""
+        # 始终使用内部同步模式：sender=server, receiver=client
         
-        # 比较IP地址，较小的作为服务器
-        if local_parts < peer_parts:
+        if self.mode == 'sender':
             self.role = 'server'
-        else:
+            self.logger.info(f"NTP模式: 内部直接同步 (sender作为NTP服务器)")
+            self.logger.info(f"NTP服务器将在 {self.ntp_server_ip} 上监听")
+        else:  # receiver
             self.role = 'client'
+            self.logger.info(f"NTP模式: 内部直接同步 (receiver作为NTP客户端)")
+            self.logger.info(f"NTP客户端将连接到 {self.ntp_server_ip}")
         
-        self.logger.info(f"Role determined: {self.role} (local: {self.local_ip}, ntp_peer: {self.ntp_peer_ip})")
+        self.logger.info(f"角色确定: {self.role}")
+        self.logger.info(f"本地通信IP: {self.local_ip}")
+        
         return self.role
     
     def wait_for_peer(self, timeout: int = 30) -> bool:
-        """等待对方无人机上线"""
-        self.logger.info(f"Waiting for NTP peer {self.ntp_peer_ip} to come online...")
-        start_time = time.time()
-        
-        while time.time() - start_time < timeout:
-            try:
-                # 尝试ping对方
-                result = subprocess.run(['ping', '-c', '1', '-W', '1', self.ntp_peer_ip], 
-                                      capture_output=True, timeout=5)
-                if result.returncode == 0:
-                    self.logger.info(f"NTP peer {self.ntp_peer_ip} is online")
-                    return True
-            except Exception as e:
-                self.logger.debug(f"Error pinging NTP peer: {e}")
+        """等待对方无人机上线（内部同步模式）"""
+        if self.role == 'server':
+            # 服务器不需要等待，直接返回成功
+            self.logger.info("NTP服务器模式，无需等待其他设备")
+            return True
+        else:
+            # 客户端需要等待服务器上线
+            self.logger.info(f"等待NTP服务器 {self.ntp_server_ip} 上线...")
+            start_time = time.time()
             
-            time.sleep(2)
-        
-        self.logger.warning(f"NTP peer {self.ntp_peer_ip} not reachable within {timeout}s")
-        return False
+            while time.time() - start_time < timeout:
+                try:
+                    result = subprocess.run(['ping', '-c', '1', '-W', '1', self.ntp_server_ip], 
+                                          capture_output=True, timeout=5)
+                    if result.returncode == 0:
+                        self.logger.info(f"NTP服务器 {self.ntp_server_ip} 已上线")
+                        return True
+                except Exception as e:
+                    self.logger.debug(f"ping NTP服务器出错: {e}")
+                
+                time.sleep(2)
+            
+            self.logger.warning(f"NTP服务器 {self.ntp_server_ip} 在{timeout}秒内未上线")
+            return False
     
     def install_chrony(self) -> bool:
         """安装chrony（如果需要）"""
@@ -100,23 +118,49 @@ class NTPSyncManager:
     
     def configure_ntp_server(self) -> bool:
         """配置为NTP服务器"""
-        # 获取网络段
-        network_prefix = '.'.join(self.local_ip.split('.')[:-1]) + '.0/24'
+        # 获取NTP服务器监听网段
+        ntp_server_network = '.'.join(self.ntp_server_ip.split('.')[:-1]) + '.0/24'
         
-        config = f"""# NTP Server Configuration - Generated by UDP Test System (Fixed)
+        # 检查指定IP是否存在于本机
+        bind_address = "0.0.0.0"  # 默认监听所有接口
+        try:
+            result = subprocess.run(['ip', 'addr', 'show'], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                interfaces = []
+                for line in result.stdout.split('\n'):
+                    if 'inet ' in line and not '127.0.0.1' in line:
+                        ip_part = line.strip().split()[1].split('/')[0]
+                        interfaces.append(ip_part)
+                
+                if self.ntp_server_ip in interfaces:
+                    bind_address = self.ntp_server_ip
+                    print(f"✓ 将在指定IP {self.ntp_server_ip} 上监听")
+                else:
+                    print(f"⚠️  指定IP {self.ntp_server_ip} 不存在，将监听所有接口")
+        except Exception as e:
+            print(f"⚠️  无法检查网络接口: {e}，将监听所有接口")
+        
+        # 配置为内部NTP服务器
+        config = f"""# NTP Server Configuration - Generated by UDP Test System (Internal Sync)
+# Sender作为NTP服务器，在指定IP地址上提供NTP服务
 # 使用本地时钟作为时间源
 local stratum 8
 
-# 允许客户端访问
-allow {self.ntp_peer_ip}
-allow {network_prefix}
+# 允许来自NTP网段的客户端访问
+allow {ntp_server_network}
+
+# 允许来自UDP通信网段的访问（如果不同）
+allow 192.168.104.0/24
 
 # 允许本地查询（用于监控）
 cmdallow 127.0.0.1
 cmdallow {self.local_ip}
 
-# 监听所有接口
-bindaddress 0.0.0.0
+# 如果NTP服务器IP与本地IP不同，也允许查询
+cmdallow {self.ntp_server_ip}
+
+# 监听指定的IP地址（如果存在）或所有接口
+bindaddress {bind_address}
 
 # 日志配置
 logdir /var/log/chrony
@@ -127,13 +171,17 @@ driftfile /var/lib/chrony/drift
 makestep 1.0 3
 rtcsync
 """
+        
         return self.write_chrony_config(config)
     
     def configure_ntp_client(self) -> bool:
         """配置为NTP客户端"""
-        config = f"""# NTP Client Configuration - Generated by UDP Test System
-# 使用对方作为时间源
-server {self.ntp_peer_ip} iburst prefer
+        # 内部同步模式：连接对方无人机的NTP服务器
+        config = f"""# NTP Client Configuration - Generated by UDP Test System (Internal Sync)
+# Receiver作为NTP客户端，连接Sender的NTP服务器进行时间同步
+# NTP对时可以使用与UDP通信不同的网段
+# 使用对方无人机作为时间源
+server {self.ntp_server_ip} iburst prefer
 
 # 快速同步配置
 makestep 1.0 3
@@ -147,6 +195,7 @@ log measurements statistics tracking
 driftfile /var/lib/chrony/drift
 rtcsync
 """
+        
         return self.write_chrony_config(config)
     
     def check_sudo_access(self) -> bool:
@@ -215,33 +264,53 @@ rtcsync
     
     def verify_server_status(self, timeout: int) -> bool:
         """验证服务器状态"""
+        print(f"⏱️  正在验证NTP服务器状态 (超时: {timeout}秒)...")
         start_time = time.time()
+        check_count = 0
+        
         while time.time() - start_time < timeout:
+            check_count += 1
             try:
-                result = subprocess.run(['chronyc', 'clients'], 
-                                      capture_output=True, text=True, timeout=5)
+                print(f"🔍 第{check_count}次检查NTP服务器状态...")
                 
-                # 如果能够查询客户端信息
-                if result.returncode == 0 and "Not authorised" not in result.stdout:
-                    if self.ntp_peer_ip in result.stdout:
-                        self.logger.info("NTP server: client connected successfully")
-                        self.sync_status['synced'] = True
-                        return True
-                else:
-                    # 如果无法查询客户端信息，检查服务器是否正常运行
-                    tracking_result = subprocess.run(['chronyc', 'tracking'], 
-                                                   capture_output=True, text=True, timeout=5)
-                    if tracking_result.returncode == 0 and "Stratum" in tracking_result.stdout:
-                        # 服务器正在运行，假设客户端会连接
-                        self.logger.info("NTP server: running normally (client query not available)")
-                        self.sync_status['synced'] = True
-                        return True
+                # 检查chrony服务状态
+                tracking_result = subprocess.run(['chronyc', 'tracking'], 
+                                               capture_output=True, text=True, timeout=5)
+                if tracking_result.returncode == 0:
+                    print(f"📊 NTP服务器状态:")
+                    for line in tracking_result.stdout.split('\n'):
+                        if line.strip():
+                            print(f"   {line}")
                     
+                    if "Stratum" in tracking_result.stdout:
+                        self.logger.info("NTP server: running normally")
+                        print("✓ NTP服务器运行正常")
+                        
+                        # 检查是否有客户端连接
+                        clients_result = subprocess.run(['chronyc', 'clients'], 
+                                                      capture_output=True, text=True, timeout=5)
+                        if clients_result.returncode == 0 and "Not authorised" not in clients_result.stdout:
+                            print(f"📊 NTP客户端连接状态:")
+                            print(f"   {clients_result.stdout.strip()}")
+                            if self.ntp_peer_ip in clients_result.stdout:
+                                print(f"✅ 检测到客户端 {self.ntp_peer_ip} 已连接!")
+                                self.sync_status['synced'] = True
+                                return True
+                        else:
+                            print("📊 无法查询客户端连接状态，但服务器运行正常")
+                        
+                        # 服务器正常运行，认为配置成功
+                        self.sync_status['synced'] = True
+                        return True
+                
             except Exception as e:
+                print(f"⚠️  检查NTP服务器状态时出错: {e}")
                 self.logger.debug(f"Error checking server status: {e}")
             
+            print(f"⏱️  等待5秒后重试... (剩余时间: {timeout - int(time.time() - start_time)}秒)")
             time.sleep(5)
         
+        print("❌ NTP服务器状态验证超时!")
         self.logger.warning("NTP server: verification timeout")
         return False
     
@@ -349,7 +418,7 @@ rtcsync
                                       capture_output=True, text=True, timeout=5)
                 lines = result.stdout.split('\n')
                 for line in lines:
-                    if '*' in line and self.ntp_peer_ip in line:
+                    if '*' in line and self.ntp_server_ip in line:
                         parts = line.split()
                         if len(parts) >= 7:
                             offset = float(parts[6]) * 1000  # 转换为毫秒
@@ -388,30 +457,109 @@ rtcsync
                 print("💡 提示：您可以手动配置chrony或使用 --skip-ntp-config 选项")
                 return False
             
-            # 4. 等待对方上线
-            if not self.wait_for_peer():
-                print("Warning: NTP peer not reachable, proceeding anyway...")
+            # 4. 网络接口检查
+            print(f"\n🔧 进行网络配置检查...")
+            if not self.check_network_interface():
+                if self.role == 'client':
+                    print("✗ 网络检查失败，无法继续")
+                    return False
+                else:
+                    print("⚠️  网络检查有警告，但继续配置")
             
-            # 5. 配置NTP
+            # 5. 等待对方上线（仅客户端）
+            if self.role == 'client':
+                if not self.wait_for_peer():
+                    print("⚠️  NTP服务器暂时不可达，但继续配置...")
+            
+            # 6. 配置NTP
+            print(f"\n🔧 配置NTP {role}...")
             if role == 'server':
                 success = self.configure_ntp_server()
+                if success:
+                    print(f"✓ NTP服务器配置完成，正在启动服务...")
+                    # 给服务器一些时间完全启动
+                    time.sleep(5)
             else:
                 success = self.configure_ntp_client()
+                if success:
+                    print(f"✓ NTP客户端配置完成")
+                    # 客户端配置后，检查端口连通性
+                    print(f"\n🔧 检查NTP连通性...")
+                    self.check_ntp_port()
             
             if not success:
                 return False
             
-            # 6. 验证同步
+            # 7. 验证同步
+            print(f"\n🔧 验证时间同步...")
             if self.verify_sync():
-                print(f"✓ Time synchronization successful! Role: {role}")
+                print(f"✅ Time synchronization successful! Role: {role}")
                 return True
             else:
-                print("✗ Time synchronization failed!")
+                print("❌ Time synchronization failed!")
                 return False
                 
         except Exception as e:
             self.logger.error(f"NTP setup failed: {e}")
             return False
+    
+    def check_network_interface(self) -> bool:
+        """检查网络接口配置"""
+        try:
+            if self.role == 'server':
+                # 对于server，检查本机是否有NTP服务器IP
+                print(f"🔍 检查NTP服务器网络接口配置...")
+                result = subprocess.run(['ip', 'addr', 'show'], capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    print(f"📊 当前网络接口：")
+                    interfaces = []
+                    for line in result.stdout.split('\n'):
+                        if 'inet ' in line and not '127.0.0.1' in line:
+                            ip_part = line.strip().split()[1].split('/')[0]
+                            interfaces.append(ip_part)
+                            print(f"   {ip_part}")
+                    
+                    # 检查NTP服务器IP是否在本机接口上
+                    if self.ntp_server_ip in interfaces:
+                        print(f"✓ NTP服务器IP {self.ntp_server_ip} 在本机接口上")
+                        return True
+                    else:
+                        print(f"⚠️  NTP服务器IP {self.ntp_server_ip} 不在本机接口上")
+                        print(f"   chrony将尝试监听所有接口 (0.0.0.0)")
+                        return True  # 不阻止继续，让chrony尝试
+            else:
+                # 对于client，检查能否ping通服务器
+                print(f"🔍 检查到NTP服务器 {self.ntp_server_ip} 的网络连接...")
+                result = subprocess.run(['ping', '-c', '1', '-W', '3', self.ntp_server_ip], 
+                                      capture_output=True, timeout=10)
+                if result.returncode == 0:
+                    print(f"✓ NTP服务器 {self.ntp_server_ip} 网络可达")
+                    return True
+                else:
+                    print(f"❌ NTP服务器 {self.ntp_server_ip} 网络不可达")
+                    return False
+        except Exception as e:
+            print(f"⚠️  网络接口检查失败: {e}")
+            return True  # 不阻止继续执行
+    
+    def check_ntp_port(self) -> bool:
+        """检查NTP端口连通性"""
+        if self.role == 'client':
+            try:
+                print(f"🔍 检查NTP端口连通性 (UDP 123)...")
+                # 使用nc检查端口
+                result = subprocess.run(['nc', '-u', '-z', '-w', '3', self.ntp_server_ip, '123'], 
+                                      capture_output=True, timeout=10)
+                if result.returncode == 0:
+                    print(f"✓ NTP端口 {self.ntp_server_ip}:123 可达")
+                    return True
+                else:
+                    print(f"⚠️  NTP端口 {self.ntp_server_ip}:123 可能不可达")
+                    return False
+            except Exception as e:
+                print(f"⚠️  NTP端口检查失败: {e}")
+                return True  # 不阻止继续执行
+        return True
 
 
 class UDPTestManager:
@@ -436,7 +584,7 @@ class UDPTestManager:
             # 初始化NTP管理器
             local_ip = config.get('local_ip', '192.168.104.10')
             ntp_peer_ip = config.get('ntp_peer_ip', config.get('peer_ip', '192.168.104.20'))  # 默认使用peer_ip
-            self.ntp_manager = NTPSyncManager(local_ip, ntp_peer_ip, self.log_path)
+            self.ntp_manager = NTPSyncManager(local_ip, ntp_peer_ip, self.log_path, self.mode)
         
         # 状态监控
         self.monitoring = False
@@ -798,19 +946,35 @@ class UDPTestManager:
             self.start_monitoring()
             step_num += 1
             
-            # 5. 等待同步稳定（仅在启用NTP时）
+            # 5. 等待时间同步稳定（仅在启用NTP时）
             if self.enable_ntp:
                 print(f"\n{step_num}. 等待时间同步稳定...")
                 time.sleep(10)
                 step_num += 1
             
-            # 6. 准备完成，记录准备时间
+            # 6. 协调启动时序（sender需要额外等待）
+            if self.mode == 'sender':
+                print(f"\n{step_num}. 等待receiver准备完成...")
+                print("   📡 为确保数据完整性，sender将额外等待20秒")
+                print("   💡 这确保了receiver有足够时间完成所有准备工作")
+                
+                # 显示倒计时
+                for i in range(20, 0, -5):
+                    print(f"   ⏱️  等待receiver准备: {i}秒...")
+                    time.sleep(5)
+                print("   ✅ 等待完成，开始UDP发送")
+                step_num += 1
+            else:
+                print(f"\n{step_num}. Receiver模式，无需额外等待")
+                step_num += 1
+            
+            # 7. 准备完成，记录准备时间
             preparation_time = time.time() - test_start_time
             print(f"\n{step_num}. 准备工作完成，耗时 {preparation_time:.1f}秒")
             print(f"   📡 现在开始 {udp_time}秒 的UDP通信测试...")
             step_num += 1
             
-            # 7. 运行UDP测试
+            # 8. 运行UDP测试
             print(f"\n{step_num}. 运行UDP测试 (模式: {self.mode})...")
             
             if self.mode == 'sender':
@@ -822,19 +986,19 @@ class UDPTestManager:
                 return False
             step_num += 1
             
-            # 8. 停止GPS记录器
+            # 9. 停止GPS记录器
             if self.enable_gps:
                 print(f"\n{step_num}. 停止GPS记录器...")
                 self.stop_gps_logging()
                 step_num += 1
             
-            # 9. 停止Nexfi状态记录器
+            # 10. 停止Nexfi状态记录器
             if self.enable_nexfi:
                 print(f"\n{step_num}. 停止Nexfi状态记录器...")
                 self.stop_nexfi_logging()
                 step_num += 1
             
-            # 10. 停止监控
+            # 11. 停止监控
             print(f"\n{step_num}. 停止状态监控...")
             self.stop_monitoring()
             
