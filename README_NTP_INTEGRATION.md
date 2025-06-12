@@ -1,6 +1,12 @@
 # 无人机UDP通信测试系统 - 集成NTP时间同步
 
-## 📋 最新功能更新 (v2.2) 🆕
+## 📋 最新功能更新 (v2.3) 🆕
+
+### ⏱️ 优化时间配置逻辑
+- **明确时间参数**: `--time` 参数现在明确表示实际UDP通信时间，不包括准备时间
+- **自动缓冲机制**: 接收端自动增加20%缓冲时间（最少60秒），确保完整接收所有数据
+- **智能时间管理**: GPS和Nexfi记录器自动延长运行时间以覆盖整个测试周期
+- **详细时间显示**: 程序会显示准备时间、UDP通信时间、缓冲时间等详细信息
 
 ### 🎛️ 灵活的NTP配置选项
 - **可选NTP对时**: 新增 `--skip-ntp` 参数，可完全跳过NTP时间同步功能
@@ -368,6 +374,28 @@ source venv/bin/activate
 
 ## 新增命令行参数详解 🆕
 
+### 时间相关参数 🆕
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `--time` | int | 60 | UDP通信时间(秒)，不包括准备时间 |
+
+**时间配置逻辑**:
+- **发送端总时间** = 准备时间 + UDP通信时间
+- **接收端总时间** = 准备时间 + UDP通信时间 + 缓冲时间
+- **准备时间**: NTP对时(~10-30s) + GPS启动(~5s) + Nexfi启动(~5s) + 其他初始化
+- **缓冲时间**: max(60秒, UDP通信时间 × 20%)
+
+**示例**:
+```bash
+# 设置300秒UDP通信时间
+./start_test.sh sender --time=300
+# 发送端: 准备~60s + UDP发送300s = 总计~360s
+
+./start_test.sh receiver --time=300  
+# 接收端: 准备~60s + UDP接收300s + 缓冲60s = 总计~420s
+```
+
 ### NTP相关参数
 
 | 参数 | 类型 | 默认值 | 说明 |
@@ -377,6 +405,12 @@ source venv/bin/activate
 | `--skip-ntp-config` | flag | false | 跳过chrony配置，使用现有配置 |
 
 ### 使用场景说明
+
+#### 何时使用新的时间配置
+- ✅ 需要精确控制UDP通信时长
+- ✅ 两端启动时机不同步的环境
+- ✅ 长时间测试，确保数据完整性
+- ✅ 自动化测试脚本，需要可预测的时间
 
 #### 何时使用 `--skip-ntp`
 - ✅ 系统已有其他时间同步机制（如GPS时钟、PTP等）
@@ -875,18 +909,49 @@ print(correlation)
 1. **sudo权限**: 配置NTP需要sudo权限（使用--skip-ntp时不需要）🆕
 2. **网络稳定**: 确保测试期间网络连接稳定
 3. **时间同步**: 测试前确保时间同步成功（启用NTP时）🆕
-4. **防火墙**: 确保相关端口未被防火墙阻止
-5. **系统负载**: 避免在高负载时进行测试
-6. **ROS2环境**: GPS记录需要正确配置的ROS2环境
-7. **GPS信号**: 确保GPS信号良好，特别是在室外环境
-8. **存储空间**: 确保有足够空间存储日志文件
-9. **Nexfi设备**: 确保Nexfi设备正常工作并可访问
-10. **网络权限**: Nexfi API访问需要正确的用户名和密码
-11. **多网卡环境**: 使用--ntp-peer-ip时确保NTP网络路由正确 🆕
+4. **时间配置**: --time参数是UDP通信时间，接收端会自动增加缓冲时间 🆕
+5. **启动时机**: 建议两端尽量同时启动，避免过大的时间差 🆕
+6. **防火墙**: 确保相关端口未被防火墙阻止
+7. **系统负载**: 避免在高负载时进行测试
+8. **ROS2环境**: GPS记录需要正确配置的ROS2环境
+9. **GPS信号**: 确保GPS信号良好，特别是在室外环境
+10. **存储空间**: 确保有足够空间存储日志文件
+11. **Nexfi设备**: 确保Nexfi设备正常工作并可访问
+12. **网络权限**: Nexfi API访问需要正确的用户名和密码
+13. **多网卡环境**: 使用--ntp-peer-ip时确保NTP网络路由正确 🆕
+14. **测试时长**: 长时间测试(>10分钟)建议监控系统资源使用情况 🆕
+15. **数据完整性**: 检查日志文件确保接收端接收到完整的数据包 🆕
 
 ## 新功能测试示例 🆕
 
-### 测试场景1: 跳过NTP对时的快速UDP测试
+### 测试场景1: 时间配置验证 🆕
+
+**目标**: 验证新的时间配置逻辑是否正确工作
+
+```bash
+# 短时间测试 (60秒)
+./start_test.sh sender --time=60 > sender_60s.log 2>&1 &
+./start_test.sh receiver --time=60 > receiver_60s.log 2>&1
+
+# 检查实际运行时间
+grep "总运行时间" sender_60s.log receiver_60s.log
+grep "UDP通信时间" sender_60s.log receiver_60s.log
+grep "缓冲时间" receiver_60s.log
+
+# 长时间测试 (300秒)
+./start_test.sh sender --time=300 > sender_300s.log 2>&1 &
+./start_test.sh receiver --time=300 > receiver_300s.log 2>&1
+
+# 验证接收端是否有足够的缓冲时间
+grep "缓冲时间" receiver_300s.log  # 应该显示60秒缓冲时间
+```
+
+**预期结果**:
+- 发送端: 准备~60s + UDP发送60s = 总计~120s
+- 接收端: 准备~60s + UDP接收60s + 缓冲60s = 总计~180s
+- 接收端应该能完整接收所有数据包
+
+### 测试场景2: 跳过NTP对时的快速UDP测试
 
 **适用情况**: 系统已有其他时间同步机制，或只需测试UDP性能
 
@@ -902,10 +967,11 @@ source venv/bin/activate
 
 **预期结果**: 
 - 跳过所有NTP配置步骤
-- 直接开始UDP通信测试
+- 发送端: 准备~20s + UDP发送120s = 总计~140s
+- 接收端: 准备~20s + UDP接收120s + 缓冲60s = 总计~200s
 - 系统监控日志中 `ntp_enabled` 为 `false`
 
-### 测试场景2: 双网卡环境（管理网络+数据网络）
+### 测试场景3: 双网卡环境（管理网络+数据网络）
 
 **网络配置**:
 - 管理网络: 192.168.1.x (用于NTP时间同步)
@@ -932,9 +998,11 @@ source venv/bin/activate
 **预期结果**:
 - NTP同步通过192.168.1.x网络
 - UDP通信通过192.168.104.x网络
+- 发送端: 准备~60s + UDP发送300s = 总计~360s
+- 接收端: 准备~60s + UDP接收300s + 缓冲60s = 总计~420s
 - 两个网络可以独立优化和管理
 
-### 测试场景3: 验证NTP参数功能
+### 测试场景4: 验证NTP参数功能
 
 **步骤1**: 运行标准NTP同步测试
 ```bash
@@ -954,11 +1022,15 @@ source venv/bin/activate
 grep "NTP" standard_ntp.log skip_ntp.log
 grep "跳过" standard_ntp.log skip_ntp.log
 
+# 检查时间配置差异
+grep "准备时间" standard_ntp.log skip_ntp.log
+grep "UDP通信时间" standard_ntp.log skip_ntp.log
+
 # 检查系统监控日志差异
 tail -5 logs/system_monitor.jsonl | jq '.ntp_enabled'
 ```
 
-### 测试场景4: 故障排除模式
+### 测试场景5: 故障排除模式
 
 **模拟网络问题时的测试**:
 ```bash
@@ -973,6 +1045,13 @@ tail -5 logs/system_monitor.jsonl | jq '.ntp_enabled'
 ```
 
 ### 验证新功能的检查清单
+
+#### ✅ 测试新的时间配置逻辑 🆕
+- [ ] 确认--time参数表示UDP通信时间
+- [ ] 确认接收端自动增加缓冲时间
+- [ ] 确认GPS/Nexfi记录器运行时间自动计算
+- [ ] 确认程序显示详细的时间分解信息
+- [ ] 确认接收端能完整接收所有数据包
 
 #### ✅ 测试 `--skip-ntp` 参数
 - [ ] 确认跳过了所有NTP配置步骤
@@ -1002,19 +1081,43 @@ tail -5 logs/system_monitor.jsonl | jq '.ntp_enabled'
 
 ```bash
 #!/bin/bash
-echo "=== 测试新NTP功能 ==="
+echo "=== 测试新时间配置和NTP功能 ==="
 
-echo "1. 测试跳过NTP功能..."
-timeout 30 ./start_test.sh sender --skip-ntp --time=10 &
+echo "1. 测试时间配置逻辑..."
+timeout 90 ./start_test.sh sender --time=30 > time_test.log 2>&1 &
+SENDER_PID=$!
+sleep 5
+timeout 120 ./start_test.sh receiver --time=30 > receiver_time_test.log 2>&1 &
+RECEIVER_PID=$!
+
+wait $SENDER_PID $RECEIVER_PID
+
+# 检查时间配置
+if grep -q "UDP通信时间: 30秒" time_test.log && grep -q "缓冲时间:" receiver_time_test.log; then
+    echo "✓ 时间配置逻辑正确"
+else
+    echo "✗ 时间配置逻辑有问题"
+fi
+
+echo "2. 测试跳过NTP功能..."
+timeout 60 ./start_test.sh sender --skip-ntp --time=20 > skip_ntp_test.log 2>&1 &
 wait
-echo "✓ 跳过NTP测试完成"
+if grep -q "跳过时间同步" skip_ntp_test.log; then
+    echo "✓ 跳过NTP功能正常"
+else
+    echo "✗ 跳过NTP功能有问题"
+fi
 
-echo "2. 测试独立NTP IP功能..."
-timeout 30 ./start_test.sh sender --ntp-peer-ip=192.168.1.20 --time=10 &
+echo "3. 测试独立NTP IP功能..."
+timeout 90 ./start_test.sh sender --ntp-peer-ip=192.168.1.20 --time=20 > ntp_ip_test.log 2>&1 &
 wait
-echo "✓ 独立NTP IP测试完成"
+if grep -q "NTP对时专用IP" ntp_ip_test.log || grep -q "192.168.1.20" ntp_ip_test.log; then
+    echo "✓ 独立NTP IP功能正常"
+else
+    echo "✗ 独立NTP IP功能有问题"
+fi
 
-echo "3. 检查系统监控日志..."
+echo "4. 检查系统监控日志..."
 if [ -f "logs/system_monitor.jsonl" ]; then
     echo "最新监控记录:"
     tail -1 logs/system_monitor.jsonl | jq '.'
@@ -1024,6 +1127,8 @@ else
 fi
 
 echo "=== 测试完成 ==="
+echo "详细日志文件："
+ls -la *test.log
 ```
 
 ## 技术支持
@@ -1039,4 +1144,186 @@ echo "=== 测试完成 ==="
 - 独立NTP IP: 检查网络路由和连通性
 - 参数兼容性: 查看详细的错误日志
 
-或者联系技术支持团队。 
+或者联系技术支持团队。
+
+## 时间配置最佳实践 🆕
+
+### 时间参数规划指南
+
+#### 短时间测试 (< 2分钟)
+```bash
+# 适用于快速验证或调试
+./start_test.sh sender --time=60    # 发送端: ~120s总时间
+./start_test.sh receiver --time=60  # 接收端: ~180s总时间
+```
+- 缓冲时间: 60秒 (固定最小值)
+- 适用场景: 功能验证、参数调试、快速测试
+
+#### 中等时间测试 (2-10分钟)
+```bash
+# 适用于性能测试
+./start_test.sh sender --time=300   # 发送端: ~360s总时间
+./start_test.sh receiver --time=300 # 接收端: ~420s总时间
+```
+- 缓冲时间: 60秒 (20% = 60s)
+- 适用场景: 性能评估、稳定性测试、数据收集
+
+#### 长时间测试 (> 10分钟)
+```bash
+# 适用于压力测试和长期稳定性验证
+./start_test.sh sender --time=1800   # 发送端: ~1860s总时间
+./start_test.sh receiver --time=1800 # 接收端: ~2220s总时间
+```
+- 缓冲时间: 360秒 (20% = 360s)
+- 适用场景: 压力测试、长期稳定性、生产环境验证
+
+### 时间配置常见问题
+
+#### 问题1: 接收端提前关闭
+
+**症状**: 
+```
+接收端日志显示: "UDP receiver completed"
+发送端仍在运行，但接收端已停止
+数据包丢失率异常高
+```
+
+**原因**: 
+- 接收端和发送端启动时间差异太大
+- 准备时间估算不准确
+- 网络延迟导致时间差
+
+**解决方案**:
+```bash
+# 方案1: 增加UDP通信时间
+./start_test.sh receiver --time=400  # 而不是300
+
+# 方案2: 手动同步启动
+# 在两台无人机上几乎同时执行命令
+
+# 方案3: 使用脚本自动化
+./synchronized_test.sh 300  # 自定义脚本处理同步
+```
+
+#### 问题2: GPS/Nexfi记录时间不够
+
+**症状**:
+```
+GPS记录器在UDP测试完成前就停止了
+Nexfi状态记录缺失测试后期数据
+```
+
+**解决方案**:
+程序已自动处理此问题：
+- GPS记录时间 = UDP时间 + 缓冲时间 + 120秒准备时间
+- Nexfi记录时间 = UDP时间 + 缓冲时间 + 120秒准备时间
+
+#### 问题3: 准备时间预估不准确
+
+**症状**:
+```
+实际准备时间超过预期
+NTP对时花费时间过长
+GPS启动缓慢
+```
+
+**监控和诊断**:
+```bash
+# 查看详细时间分解
+grep "准备时间" logs/udp_test_*.log
+grep "总运行时间" logs/udp_test_*.log
+
+# 检查各组件启动时间
+grep "NTP.*成功" logs/udp_test_*.log
+grep "GPS.*启动成功" logs/udp_test_*.log
+grep "Nexfi.*启动成功" logs/udp_test_*.log
+```
+
+### 自动化测试脚本建议
+
+#### 创建同步启动脚本
+
+`synchronized_test.sh`:
+```bash
+#!/bin/bash
+# 使用方法: ./synchronized_test.sh <mode> <time> [other_args]
+
+MODE=$1
+TIME=$2
+shift 2
+
+echo "=== 同步UDP测试启动 ==="
+echo "模式: $MODE"
+echo "UDP通信时间: ${TIME}秒"
+
+# 计算预期总时间
+if [[ "$MODE" == "sender" ]]; then
+    TOTAL_TIME=$((TIME + 80))  # 80秒准备时间预估
+else
+    BUFFER_TIME=$((TIME > 300 ? TIME / 5 : 60))
+    TOTAL_TIME=$((TIME + BUFFER_TIME + 80))
+fi
+
+echo "预计总时间: ${TOTAL_TIME}秒"
+echo "启动倒计时..."
+
+# 3秒倒计时
+for i in 3 2 1; do
+    echo "$i..."
+    sleep 1
+done
+
+echo "启动!"
+./start_test.sh $MODE --time=$TIME "$@"
+```
+
+#### 批量测试脚本
+
+`batch_test.sh`:
+```bash
+#!/bin/bash
+# 批量测试不同时间配置
+
+TEST_TIMES=(60 300 600 1200)
+
+for time in "${TEST_TIMES[@]}"; do
+    echo "=== 测试 ${time}秒 UDP通信 ==="
+    
+    # 创建测试目录
+    mkdir -p "test_results/${time}s"
+    
+    # 运行测试
+    ./start_test.sh $1 --time=$time --log-path="test_results/${time}s" || {
+        echo "测试失败: ${time}秒"
+        continue
+    }
+    
+    # 分析结果
+    echo "测试完成: ${time}秒"
+    if [ -f "test_results/${time}s/udp_receiver_*.csv" ]; then
+        PACKET_COUNT=$(tail -n +2 "test_results/${time}s/udp_receiver_*.csv" | wc -l)
+        echo "接收数据包数: $PACKET_COUNT"
+    fi
+    
+    sleep 10  # 间隔时间
+done
+```
+
+### 性能调优建议
+
+#### 网络环境优化
+- **有线连接**: 使用有线网络可减少准备时间和提高稳定性
+- **网络延迟**: 高延迟网络需要增加更多缓冲时间
+- **带宽限制**: 低带宽环境建议降低发送频率或包大小
+
+#### 系统资源优化
+- **CPU负载**: 高CPU使用率会影响时间精度，建议关闭不必要服务
+- **内存使用**: 确保有足够内存避免swap影响性能
+- **磁盘I/O**: 使用SSD可提高日志写入性能
+
+#### 时间同步优化
+- **本地时钟**: 使用高精度时钟源
+- **NTP配置**: 优化chrony配置参数
+- **网络路径**: NTP流量使用专用网络路径
+
+## 时间同步机制 

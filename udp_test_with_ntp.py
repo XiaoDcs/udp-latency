@@ -483,13 +483,23 @@ class UDPTestManager:
         try:
             self.logger.info("Starting GPS logger...")
             
+            # GPS记录器运行时间 = UDP通信时间 + 准备时间 + 缓冲时间
+            udp_time = self.config.get('running_time', 60)
+            if self.mode == 'receiver':
+                # 接收端需要更长的GPS记录时间
+                buffer_time = max(60, udp_time * 0.2)
+                total_gps_time = udp_time + buffer_time + 120  # 额外2分钟用于准备和清理
+            else:
+                # 发送端GPS记录时间
+                total_gps_time = udp_time + 120  # 额外2分钟用于准备和清理
+            
             # 构建GPS记录器命令
             cmd = [
                 'python3', 'gps.py',
                 '--drone-id', self.drone_id,
                 '--log-path', self.log_path,
                 '--interval', str(self.gps_interval),
-                '--time', str(self.config.get('running_time', 3600)),
+                '--time', str(total_gps_time),
                 '--verbose', 'true'
             ]
             
@@ -510,7 +520,7 @@ class UDPTestManager:
             
             # 检查进程是否正常运行
             if self.gps_process.poll() is None:
-                self.logger.info("GPS logger started successfully")
+                self.logger.info(f"GPS logger started successfully (will run for {total_gps_time}s)")
                 return True
             else:
                 stdout, stderr = self.gps_process.communicate()
@@ -545,6 +555,16 @@ class UDPTestManager:
         try:
             self.logger.info("Starting Nexfi status logger...")
             
+            # Nexfi记录器运行时间 = UDP通信时间 + 准备时间 + 缓冲时间
+            udp_time = self.config.get('running_time', 60)
+            if self.mode == 'receiver':
+                # 接收端需要更长的Nexfi记录时间
+                buffer_time = max(60, udp_time * 0.2)
+                total_nexfi_time = udp_time + buffer_time + 120  # 额外2分钟用于准备和清理
+            else:
+                # 发送端Nexfi记录时间
+                total_nexfi_time = udp_time + 120  # 额外2分钟用于准备和清理
+            
             # 构建Nexfi状态记录器命令
             cmd = [
                 'python3', 'nexfi_client.py',
@@ -553,7 +573,7 @@ class UDPTestManager:
                 '--password', self.nexfi_password,
                 '--log-path', self.log_path,
                 '--interval', str(self.nexfi_interval),
-                '--time', str(self.config.get('running_time', 3600)),
+                '--time', str(total_nexfi_time),
                 '--device', self.nexfi_device,
                 '--verbose', 'true'
             ]
@@ -571,7 +591,7 @@ class UDPTestManager:
             
             # 检查进程是否正常运行
             if self.nexfi_process.poll() is None:
-                self.logger.info("Nexfi status logger started successfully")
+                self.logger.info(f"Nexfi status logger started successfully (will run for {total_nexfi_time}s)")
                 return True
             else:
                 stdout, stderr = self.nexfi_process.communicate()
@@ -697,13 +717,20 @@ class UDPTestManager:
         """运行UDP接收端"""
         self.logger.info("Starting UDP receiver...")
         
+        # 接收端运行时间 = UDP通信时间 + 额外缓冲时间
+        udp_time = self.config.get('running_time', 60)
+        buffer_time = max(60, udp_time * 0.2)  # 至少60秒缓冲，或者20%的额外时间
+        total_receiver_time = udp_time + buffer_time
+        
+        self.logger.info(f"Receiver will run for {total_receiver_time}s (UDP: {udp_time}s + buffer: {buffer_time}s)")
+        
         # 构建命令
         cmd = [
             'python3', 'udp_receiver.py',
             '--local-ip', self.config.get('local_ip', '0.0.0.0'),
             '--local-port', str(self.config.get('local_port', 20001)),
             '--buffer-size', str(self.config.get('buffer_size', 1500)),
-            '--time', str(self.config.get('running_time', 3600)),
+            '--time', str(total_receiver_time),
             '--log-path', self.log_path
         ]
         
@@ -722,7 +749,20 @@ class UDPTestManager:
             print("无人机UDP通信测试系统 - 集成NTP时间同步")
             print("=" * 60)
             
+            # 显示时间配置说明
+            udp_time = self.config.get('running_time', 60)
+            print(f"\n⏱️  时间配置说明:")
+            print(f"   - UDP通信时间: {udp_time}秒")
+            if self.mode == 'receiver':
+                buffer_time = max(60, udp_time * 0.2)
+                total_receiver_time = udp_time + buffer_time
+                print(f"   - 接收端总运行时间: {total_receiver_time}秒 (含{buffer_time}秒缓冲)")
+            print(f"   - 程序包含准备时间(NTP对时、GPS启动等)，实际UDP通信将在准备完成后开始")
+            
             step_num = 1
+            
+            # 记录测试开始时间
+            test_start_time = time.time()
             
             # 1. 设置时间同步（可选）
             if self.enable_ntp:
@@ -764,7 +804,13 @@ class UDPTestManager:
                 time.sleep(10)
                 step_num += 1
             
-            # 6. 运行UDP测试
+            # 6. 准备完成，记录准备时间
+            preparation_time = time.time() - test_start_time
+            print(f"\n{step_num}. 准备工作完成，耗时 {preparation_time:.1f}秒")
+            print(f"   📡 现在开始 {udp_time}秒 的UDP通信测试...")
+            step_num += 1
+            
+            # 7. 运行UDP测试
             print(f"\n{step_num}. 运行UDP测试 (模式: {self.mode})...")
             
             if self.mode == 'sender':
@@ -776,21 +822,28 @@ class UDPTestManager:
                 return False
             step_num += 1
             
-            # 7. 停止GPS记录器
+            # 8. 停止GPS记录器
             if self.enable_gps:
                 print(f"\n{step_num}. 停止GPS记录器...")
                 self.stop_gps_logging()
                 step_num += 1
             
-            # 8. 停止Nexfi状态记录器
+            # 9. 停止Nexfi状态记录器
             if self.enable_nexfi:
                 print(f"\n{step_num}. 停止Nexfi状态记录器...")
                 self.stop_nexfi_logging()
                 step_num += 1
             
-            # 9. 停止监控
+            # 10. 停止监控
             print(f"\n{step_num}. 停止状态监控...")
             self.stop_monitoring()
+            
+            # 显示总结信息
+            total_time = time.time() - test_start_time
+            print(f"\n📊 测试完成总结:")
+            print(f"   - 总运行时间: {total_time:.1f}秒")
+            print(f"   - 准备时间: {preparation_time:.1f}秒")
+            print(f"   - UDP通信时间: {udp_time}秒")
             
             if success:
                 print(f"\n✓ 测试完成！日志保存在: {self.log_path}")

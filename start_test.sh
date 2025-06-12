@@ -71,7 +71,9 @@ show_help() {
     echo "  --log-path=PATH          日志保存路径 (默认: ./logs)"
     echo "  --frequency=FREQ         发送频率(Hz) (默认: 10)"
     echo "  --packet-size=SIZE       数据包大小(字节) (默认: 1000)"
-    echo "  --time=TIME              运行时间(秒) (默认: 60)"
+    echo "  --time=TIME              UDP通信时间(秒) (默认: 60) 🆕"
+    echo "                           注意: 这是实际UDP通信时间，不包括准备时间"
+    echo "                           接收端会自动增加20%缓冲时间确保完整接收"
     echo "  --buffer-size=SIZE       缓冲区大小(字节) (默认: 1500)"
     echo ""
     echo "NTP时间同步选项:"
@@ -95,6 +97,12 @@ show_help() {
     echo ""
     echo "  -h, --help               显示帮助信息"
     echo ""
+    echo "⏱️  时间配置说明:"
+    echo "  - --time参数指定的是实际UDP通信时间，不包括NTP对时、GPS启动等准备时间"
+    echo "  - 发送端: 准备时间 + UDP通信时间"
+    echo "  - 接收端: 准备时间 + UDP通信时间 + 自动缓冲时间(20%或最少60秒)"
+    echo "  - GPS和Nexfi记录器会自动延长运行时间以覆盖整个测试周期"
+    echo ""
     echo "示例:"
     echo "  $0 sender --local-ip=192.168.104.10 --peer-ip=192.168.104.20"
     echo "  $0 receiver --time=300 --enable-gps"
@@ -104,6 +112,10 @@ show_help() {
     echo "  $0 sender --skip-ntp --peer-ip=192.168.104.20"
     echo "  $0 receiver --ntp-peer-ip=192.168.104.30 --peer-ip=192.168.104.20"
     echo ""
+    echo "时间配置示例:"
+    echo "  $0 sender --time=300     # 发送端: 准备~60s + UDP发送300s"
+    echo "  $0 receiver --time=300   # 接收端: 准备~60s + UDP接收300s + 缓冲60s"
+    echo ""
     echo "注意:"
     echo "  - 两台无人机需要在同一网段内能够相互通信"
     echo "  - 默认启用NTP时间同步，IP地址较小的无人机会自动成为NTP服务器"
@@ -111,6 +123,7 @@ show_help() {
     echo "  - NTP对时IP可以与UDP通信IP不同，使用--ntp-peer-ip单独指定"
     echo "  - GPS记录需要ROS2环境和as2_python_api"
     echo "  - Nexfi状态记录需要requests库和Nexfi设备连接"
+    echo "  - 接收端会自动延长运行时间，确保能接收到发送端的所有数据"
 }
 
 # 检查依赖
@@ -223,13 +236,22 @@ show_config() {
     echo "本地IP:       $LOCAL_IP"
     echo "对方IP:       $PEER_IP"
     echo "日志路径:     $LOG_PATH"
+    
+    # 计算时间配置
+    UDP_TIME=$RUNNING_TIME
     if [[ "$MODE" == "sender" ]]; then
         echo "发送频率:     $FREQUENCY Hz"
         echo "数据包大小:   $PACKET_SIZE 字节"
-        echo "运行时间:     $RUNNING_TIME 秒"
+        echo "UDP通信时间:  $UDP_TIME 秒"
+        echo "预计总时间:   ~$((UDP_TIME + 60)) 秒 (含准备时间)"
     else
+        BUFFER_TIME=$((UDP_TIME > 300 ? UDP_TIME / 5 : 60))  # 20%缓冲或最少60秒
+        TOTAL_RECEIVER_TIME=$((UDP_TIME + BUFFER_TIME))
         echo "缓冲区大小:   $BUFFER_SIZE 字节"
-        echo "最长运行时间: $RUNNING_TIME 秒"
+        echo "UDP通信时间:  $UDP_TIME 秒"
+        echo "缓冲时间:     $BUFFER_TIME 秒"
+        echo "接收端总时间: $TOTAL_RECEIVER_TIME 秒"
+        echo "预计总时间:   ~$((TOTAL_RECEIVER_TIME + 60)) 秒 (含准备时间)"
     fi
     echo ""
     echo "NTP时间同步配置:"
@@ -249,6 +271,12 @@ show_config() {
         echo "无人机ID:     $DRONE_ID"
         echo "GPS记录间隔:  $GPS_INTERVAL 秒"
         echo "使用仿真时间: $USE_SIM_TIME"
+        if [[ "$MODE" == "receiver" ]]; then
+            GPS_TOTAL_TIME=$((UDP_TIME + BUFFER_TIME + 120))
+        else
+            GPS_TOTAL_TIME=$((UDP_TIME + 120))
+        fi
+        echo "GPS记录时长:  $GPS_TOTAL_TIME 秒 (自动计算)"
     fi
     echo "Nexfi通信状态记录配置:"
     echo "启用Nexfi通信状态记录:  $ENABLE_NEXFI"
@@ -258,8 +286,22 @@ show_config() {
         echo "Nexfi服务器密码: $NEXFI_PASSWORD"
         echo "Nexfi记录间隔:  $NEXFI_INTERVAL 秒"
         echo "Nexfi设备名称: $NEXFI_DEVICE"
+        if [[ "$MODE" == "receiver" ]]; then
+            NEXFI_TOTAL_TIME=$((UDP_TIME + BUFFER_TIME + 120))
+        else
+            NEXFI_TOTAL_TIME=$((UDP_TIME + 120))
+        fi
+        echo "Nexfi记录时长: $NEXFI_TOTAL_TIME 秒 (自动计算)"
     fi
     echo "=========================================="
+    echo ""
+    echo "💡 时间说明:"
+    echo "   - UDP通信时间: 实际UDP数据传输时间"
+    echo "   - 准备时间: NTP对时、GPS启动等初始化操作"
+    if [[ "$MODE" == "receiver" ]]; then
+        echo "   - 缓冲时间: 接收端额外等待时间，确保接收完整"
+    fi
+    echo "   - 总运行时间: 准备 + UDP通信 + 缓冲(仅接收端)"
     echo ""
 }
 
