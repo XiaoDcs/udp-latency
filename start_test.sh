@@ -31,6 +31,9 @@ NEXFI_PASSWORD="nexfi"
 NEXFI_INTERVAL=1.0
 NEXFI_DEVICE="adhoc0"
 
+# 静态路由配置 🆕
+ENABLE_STATIC_ROUTE=false
+
 # UDP网络错误处理配置 🆕
 NETWORK_RETRY_DELAY=1.0
 LOG_NETWORK_ERRORS=true
@@ -99,6 +102,11 @@ show_help() {
     echo "  --nexfi-interval=SEC     Nexfi记录间隔(秒) (默认: 1.0)"
     echo "  --nexfi-device=DEVICE    Nexfi设备名称 (默认: adhoc0)"
     echo ""
+    echo "静态路由配置选项 🆕:"
+    echo "  --enable-static-route    启用静态路由配置"
+    echo "                           自动配置: ip route add [local-ip]/32 via [nexfi-ip]"
+    echo "                           适用于需要通过网关路由本地IP的场景"
+    echo ""
     echo "UDP网络错误处理选项 🆕:"
     echo "  --network-retry-delay=SEC  网络错误重试延迟(秒) (默认: 1.0)"
     echo "  --log-network-errors=BOOL  是否记录网络错误到日志 (默认: true)"
@@ -120,6 +128,7 @@ show_help() {
     echo "  $0 receiver --enable-gps --enable-nexfi --time=600"
     echo "  $0 sender --skip-ntp --peer-ip=192.168.104.20"
     echo "  $0 receiver --ntp-peer-ip=192.168.104.30 --peer-ip=192.168.104.20"
+    echo "  $0 sender --enable-static-route --local-ip=192.168.104.112 --nexfi-ip=192.168.104.12"
     echo ""
     echo "时间配置示例:"
     echo "  $0 sender --time=300     # 发送端: 准备~60s + UDP发送300s"
@@ -235,6 +244,57 @@ check_network() {
     fi
 }
 
+# 配置静态路由 🆕
+configure_static_route() {
+    if [[ "$ENABLE_STATIC_ROUTE" != "true" ]]; then
+        return 0
+    fi
+    
+    print_info "配置静态路由..."
+    
+    # 检查是否已存在相同的路由
+    existing_route=$(ip route show "$LOCAL_IP/32" 2>/dev/null | grep "via $NEXFI_IP" || true)
+    if [[ -n "$existing_route" ]]; then
+        print_info "静态路由已存在: $existing_route"
+        return 0
+    fi
+    
+    # 验证nexfi_ip是否可达
+    print_info "验证网关 $NEXFI_IP 连通性..."
+    if ! ping -c 1 -W 3 "$NEXFI_IP" &> /dev/null; then
+        print_warning "网关 $NEXFI_IP 不可达，但仍将配置静态路由"
+    else
+        print_success "网关 $NEXFI_IP 可达"
+    fi
+    
+    # 配置静态路由
+    route_cmd="ip route add $LOCAL_IP/32 via $NEXFI_IP"
+    print_info "执行路由配置: $route_cmd"
+    
+    if sudo $route_cmd 2>/dev/null; then
+        print_success "静态路由配置成功"
+        print_info "路由信息: $(ip route show "$LOCAL_IP/32" 2>/dev/null || echo '未找到路由信息')"
+    else
+        print_error "静态路由配置失败"
+        print_warning "请检查:"
+        print_warning "  1. 是否有sudo权限"
+        print_warning "  2. 网关IP $NEXFI_IP 是否正确"
+        print_warning "  3. 本地IP $LOCAL_IP 是否正确"
+        print_warning "  4. 是否存在冲突的路由规则"
+        echo ""
+        echo "当前路由表:"
+        ip route show | head -10
+        echo ""
+        read -p "是否继续执行测试? [y/N]: " -r
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            print_info "测试已取消"
+            return 1
+        fi
+    fi
+    
+    return 0
+}
+
 # 显示配置信息
 show_config() {
     echo ""
@@ -305,6 +365,13 @@ show_config() {
             NEXFI_TOTAL_TIME=$((UDP_TIME + 120))
         fi
         echo "Nexfi记录时长: $NEXFI_TOTAL_TIME 秒 (自动计算)"
+    fi
+    echo ""
+    echo "静态路由配置 🆕:"
+    echo "启用静态路由:  $ENABLE_STATIC_ROUTE"
+    if [[ "$ENABLE_STATIC_ROUTE" == "true" ]]; then
+        echo "路由规则:     ip route add $LOCAL_IP/32 via $NEXFI_IP"
+        echo "说明:         配置本地IP到Nexfi网关的静态路由"
     fi
     echo "=========================================="
     echo ""
@@ -505,6 +572,10 @@ parse_args() {
                 LOG_NETWORK_ERRORS="${1#*=}"
                 shift
                 ;;
+            --enable-static-route)
+                ENABLE_STATIC_ROUTE=true
+                shift
+                ;;
             -h|--help)
                 show_help
                 exit 0
@@ -541,6 +612,11 @@ main() {
     
     # 检查网络
     check_network
+    
+    # 配置静态路由
+    if ! configure_static_route; then
+        exit 1
+    fi
     
     # 显示配置
     show_config

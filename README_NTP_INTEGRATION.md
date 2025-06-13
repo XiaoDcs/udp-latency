@@ -2,6 +2,13 @@
 
 ## 📋 最新功能更新 (v2.3) 🆕
 
+### 🛣️ 静态路由配置功能 🆕
+- **自动路由配置**: 新增 `--enable-static-route` 参数，支持自动配置静态路由
+- **网关路由支持**: 自动执行 `ip route add [local-ip]/32 via [nexfi-ip]` 配置本地IP到网关的路由
+- **智能检测**: 自动检查路由是否已存在，避免重复配置
+- **故障处理**: 提供详细的错误诊断和用户友好的故障处理
+- **使用场景**: 适用于需要通过特定网关路由本机IP的复杂网络环境
+
 ### ⏱️ 优化时间配置逻辑
 - **明确时间参数**: `--time` 参数现在明确表示实际UDP通信时间，不包括准备时间
 - **自动缓冲机制**: 接收端自动增加20%缓冲时间（最少60秒），确保完整接收所有数据
@@ -193,6 +200,7 @@ source /opt/ros/humble/setup.bash
 - ✅ **一键启动**: 简化的启动脚本，自动化整个测试流程
 - ✅ **GPS数据记录**: 集成GPS位置记录，支持ROS2环境
 - ✅ **Nexfi通信状态记录**: 实时记录通信模块状态和链路质量
+- ✅ **静态路由配置**: 自动配置本地IP到指定网关的静态路由 🆕
 - ✅ **实时监控**: 持续监控时间同步状态和系统状态
 - ✅ **完整日志**: 详细的测试日志、GPS轨迹、通信状态和同步状态记录
 - ✅ **故障处理**: 自动处理网络中断和同步异常
@@ -437,6 +445,60 @@ source venv/bin/activate
 - **Nexfi管理网段**: 172.16.1.x (设备管理)
 - **sender的NTP服务器**: 必须在10.0.0.10上启动
 - **receiver的NTP客户端**: 必须连接到10.0.0.10
+
+#### 静态路由配置示例 🆕
+
+**使用场景**: 当本地IP需要通过特定网关进行路由时，比如无人机本地IP需要通过Nexfi设备作为网关路由。
+
+**静态路由配置**:
+
+**发送端（sender）- 包含静态路由**:
+```bash
+source venv/bin/activate
+./start_test.sh sender \
+  --local-ip=192.168.104.112 \         # 本地UDP通信IP
+  --peer-ip=192.168.104.109 \          # UDP通信对方IP
+  --ntp-peer-ip=192.168.0.200 \        # NTP对时专用IP
+  --enable-nexfi \
+  --nexfi-ip=192.168.104.12 \          # Nexfi设备IP（作为网关）
+  --enable-static-route \              # 启用静态路由配置
+  --time=120
+```
+
+**接收端（receiver）- 包含静态路由**:
+```bash
+source venv/bin/activate
+./start_test.sh receiver \
+  --local-ip=192.168.104.109 \         # 本地UDP通信IP
+  --peer-ip=192.168.104.112 \          # UDP通信对方IP
+  --ntp-peer-ip=192.168.0.200 \        # NTP对时专用IP（连接到sender）
+  --enable-nexfi \
+  --nexfi-ip=192.168.104.15 \          # Nexfi设备IP（作为网关）
+  --enable-static-route \              # 启用静态路由配置
+  --time=120
+```
+
+**静态路由功能说明**:
+- **自动执行**: 系统会自动执行 `ip route add [local-ip]/32 via [nexfi-ip]`
+- **智能检测**: 检查路由是否已存在，避免重复配置
+- **网关验证**: 自动ping检测网关连通性
+- **权限检查**: 需要sudo权限配置路由
+- **故障处理**: 配置失败时提供详细诊断信息
+
+**实际执行的路由命令**:
+```bash
+# 发送端会执行：
+sudo ip route add 192.168.104.112/32 via 192.168.104.12
+
+# 接收端会执行：
+sudo ip route add 192.168.104.109/32 via 192.168.104.15
+```
+
+**适用场景**:
+- ✅ 无人机IP需要通过Nexfi设备路由
+- ✅ 复杂网络拓扑，需要指定特定网关
+- ✅ 多跳网络环境，本地IP不在直连网段
+- ✅ 网络安全策略，强制通过特定路径
 
 ## 新增命令行参数详解 🆕
 
@@ -1674,3 +1736,282 @@ done
 - **网络路径**: NTP流量使用专用网络路径
 
 ## 时间同步机制 
+
+### 静态路由相关参数 🆕
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `--enable-static-route` | flag | false | 启用静态路由配置功能 |
+
+**静态路由配置逻辑**:
+- **路由规则**: 自动执行 `ip route add [local-ip]/32 via [nexfi-ip]`
+- **智能检测**: 检查路由是否已存在，避免重复配置
+- **网关验证**: ping检测网关（nexfi-ip）的连通性
+- **权限检查**: 需要sudo权限执行ip route命令
+- **故障处理**: 配置失败时提供详细诊断和用户选择
+
+**使用示例**:
+```bash
+# 基本静态路由配置
+./start_test.sh sender \
+  --local-ip=192.168.104.112 \
+  --nexfi-ip=192.168.104.12 \
+  --enable-static-route
+
+# 系统将执行：sudo ip route add 192.168.104.112/32 via 192.168.104.12
+```
+
+**注意事项**:
+- ⚠️ **依赖关系**: 需要同时设置 `--local-ip` 和 `--nexfi-ip` 参数
+- ⚠️ **权限要求**: 需要sudo权限配置系统路由表
+- ⚠️ **网络规划**: 确保nexfi-ip作为网关能够正确路由local-ip
+- ⚠️ **路由冲突**: 检查现有路由表，避免配置冲突的路由规则
+
+### 使用场景说明
+
+### NTP角色分配逻辑 🆕
+
+**重要更新**: 系统已改为基于 sender/receiver 模式的固定角色分配，不再根据IP地址大小比较。
+
+#### 固定角色分配
+- **sender 固定作为 NTP 服务器**: 无论IP地址大小，sender总是启动NTP服务器
+- **receiver 固定作为 NTP 客户端**: receiver总是连接sender的NTP服务器进行时间同步
+
+```
+发送端 (sender)    ←→    接收端 (receiver)
+NTP服务器                 NTP客户端
+在指定IP上监听             连接到服务器IP
+```
+
+#### `--ntp-peer-ip` 参数详解 🔑
+
+**关键理解**: `--ntp-peer-ip` 在两种模式下含义不同，但指向同一个物理地址
+
+| 模式 | `--ntp-peer-ip` 含义 | 作用 |
+|------|---------------------|------|
+| **sender** | 本机NTP服务器监听IP | sender在这个IP上启动NTP服务器 |
+| **receiver** | 要连接的NTP服务器IP | receiver连接到这个IP的NTP服务器 |
+
+**配置示例**:
+```bash
+# 两台机器都填写同一个IP地址：192.168.0.200
+# 这个IP必须是sender机器上的网络接口IP
+
+# sender机器配置
+./start_test.sh sender \
+  --local-ip=192.168.104.112 \
+  --peer-ip=192.168.104.109 \
+  --ntp-peer-ip=192.168.0.200    # sender在此IP上启动NTP服务器
+
+# receiver机器配置  
+./start_test.sh receiver \
+  --local-ip=192.168.104.109 \
+  --peer-ip=192.168.104.112 \
+  --ntp-peer-ip=192.168.0.200    # receiver连接到此IP的NTP服务器
+```
+
+#### 网络接口检查
+
+sender会自动检查指定的NTP服务器IP是否存在于本机网络接口：
+
+```bash
+# 如果192.168.0.200存在于sender的网络接口
+✓ 将在指定IP 192.168.0.200 上监听
+
+# 如果192.168.0.200不存在于sender的网络接口  
+⚠️  指定IP 192.168.0.200 不存在，将监听所有接口 (0.0.0.0)
+```
+
+#### 常见配置场景
+
+**场景1: 单网卡环境（NTP和UDP使用同一网段）**
+```bash
+# sender
+./start_test.sh sender \
+  --local-ip=192.168.104.10 \
+  --peer-ip=192.168.104.20 \
+  --ntp-peer-ip=192.168.104.10    # 使用本机UDP通信IP作为NTP服务器IP
+
+# receiver
+./start_test.sh receiver \
+  --local-ip=192.168.104.20 \
+  --peer-ip=192.168.104.10 \
+  --ntp-peer-ip=192.168.104.10    # 连接到sender的UDP通信IP
+```
+
+**场景2: 双网卡环境（NTP和UDP使用不同网段）**
+```bash
+# sender机器有两个网络接口：
+# - eth0: 192.168.104.10 (UDP通信网段)  
+# - eth1: 192.168.0.200 (NTP对时专用网段)
+
+# sender配置
+./start_test.sh sender \
+  --local-ip=192.168.104.10 \     # UDP通信使用eth0
+  --peer-ip=192.168.104.20 \
+  --ntp-peer-ip=192.168.0.200     # NTP服务器使用eth1
+
+# receiver配置
+./start_test.sh receiver \
+  --local-ip=192.168.104.20 \     # UDP通信使用对应接口
+  --peer-ip=192.168.104.10 \  
+  --ntp-peer-ip=192.168.0.200     # 连接到sender的eth1接口
+```
+
+**场景3: 默认行为（不指定--ntp-peer-ip）**
+```bash
+# 如果不指定--ntp-peer-ip，系统使用--peer-ip的值
+# sender
+./start_test.sh sender --local-ip=192.168.104.10 --peer-ip=192.168.104.20
+# 等价于: --ntp-peer-ip=192.168.104.20（但这是错误的！）
+
+# 正确做法：明确指定sender的IP作为NTP服务器IP
+./start_test.sh sender --local-ip=192.168.104.10 --peer-ip=192.168.104.20 --ntp-peer-ip=192.168.104.10
+./start_test.sh receiver --local-ip=192.168.104.20 --peer-ip=192.168.104.10 --ntp-peer-ip=192.168.104.10
+```
+
+#### 配置验证
+
+**检查sender的网络接口**:
+```bash
+# 在sender机器上检查网络接口
+ip addr show
+
+# 确认NTP服务器IP存在
+ip addr show | grep "192.168.0.200"
+```
+
+**检查NTP连通性**:
+```bash
+# 在receiver机器上测试NTP服务器连通性
+ping 192.168.0.200
+
+# 测试NTP端口（UDP 123）
+nc -u -z -w 3 192.168.0.200 123
+```
+
+#### 重要提醒 ⚠️
+
+1. **IP地址规划**: `--ntp-peer-ip` 必须是sender机器上真实存在的网络接口IP
+2. **网络路由**: 确保receiver能够路由到sender的NTP服务器IP
+3. **防火墙**: 确保NTP端口（UDP 123）未被阻止
+4. **一致性**: 两台机器的 `--ntp-peer-ip` 必须填写相同的IP地址
+5. **网络分离**: 如果使用独立NTP网络，确保两台机器都能访问该网络
+
+### 同步精度
+- **初始同步**: ±50ms以内（代码中的阈值）
+- **稳定运行**: ±5-10ms
+- **网络良好时**: ±1-3ms
+
+### 监控机制
+- 每10秒检查一次同步状态
+- 自动记录时间偏移量到系统监控日志
+- 同步异常时发出警告
+- 实时显示同步状态和偏移量
+
+### 故障恢复机制
+- 客户端连接失败时会持续重试
+- 服务器状态异常会自动重启服务
+- 网络中断后自动恢复同步
+
+## 故障排除
+
+### 常见问题
+
+#### 1. GPS记录器启动失败
+**症状**: 显示 "GPS logger failed to start"
+**解决方案**:
+```bash
+# 检查ROS2环境
+source /opt/ros/humble/setup.bash
+
+# 检查无人机连接
+ros2 topic list | grep drone
+
+# 检查GPS接口
+python3 -c "from as2_python_api.drone_interface_gps import DroneInterfaceGPS"
+
+# 手动测试GPS记录器
+python3 gps.py --drone-id=drone0 --time=10
+```
+
+#### 2. GPS数据全为0
+**症状**: GPS坐标显示为 (0.0, 0.0, 0.0)
+**解决方案**:
+```bash
+# 检查GPS话题
+```
+
+#### 4. 对方无人机不可达
+**症状**: ping 对方IP失败
+**解决方案**:
+```bash
+# 检查网络配置
+ip addr show
+ip route show
+
+# 检查网络连接
+ping 192.168.104.20
+
+# 检查防火墙
+sudo ufw allow from 192.168.104.0/24
+```
+
+#### 5. 静态路由配置失败 🆕
+**症状**: 
+- 显示 "静态路由配置失败"
+- 提示权限不足或网关不可达
+- 路由表未生效
+
+**解决方案**:
+```bash
+# 步骤1: 检查sudo权限
+sudo -v
+echo "如果提示输入密码，说明需要sudo权限"
+
+# 步骤2: 验证网关连通性
+ping -c 3 192.168.104.12  # 替换为您的nexfi-ip
+
+# 步骤3: 检查现有路由表
+ip route show
+echo "查看是否存在冲突的路由规则"
+
+# 步骤4: 手动测试路由配置
+sudo ip route add 192.168.104.112/32 via 192.168.104.12  # 替换为实际IP
+ip route show 192.168.104.112/32
+
+# 步骤5: 删除测试路由（如果需要）
+sudo ip route del 192.168.104.112/32 via 192.168.104.12
+
+# 步骤6: 检查网络接口配置
+ip addr show
+echo "确认local-ip和nexfi-ip都在正确的网段"
+```
+
+**常见问题诊断**:
+```bash
+# 问题1: 权限不足
+sudo whoami  # 应该返回root
+
+# 问题2: 网关不在同一网段
+echo "检查local-ip和nexfi-ip是否在合理的网络拓扑中"
+ip route get 192.168.104.12  # 查看到网关的路由
+
+# 问题3: 路由冲突
+ip route show | grep "192.168.104.112"  # 检查现有路由
+
+# 问题4: 网络接口未配置
+ip addr show | grep "192.168.104"  # 检查IP配置
+```
+
+**网络规划验证**:
+```bash
+# 验证IP地址规划的合理性
+echo "=== 网络配置检查 ==="
+echo "本地IP: 192.168.104.112"
+echo "网关IP: 192.168.104.12"
+echo "检查: 网关应该能够路由到本地IP的网段"
+
+# 测试网络连通性
+traceroute 192.168.104.12
+echo "确保网关在网络拓扑中可达"
