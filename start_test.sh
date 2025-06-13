@@ -33,6 +33,7 @@ NEXFI_DEVICE="adhoc0"
 
 # 静态路由配置 🆕
 ENABLE_STATIC_ROUTE=false
+CONFIGURED_STATIC_ROUTE=""  # 记录已配置的静态路由，用于清理
 
 # UDP网络错误处理配置 🆕
 NETWORK_RETRY_DELAY=1.0
@@ -106,6 +107,7 @@ show_help() {
     echo "  --enable-static-route    启用静态路由配置"
     echo "                           自动配置: ip route add [local-ip]/32 via [nexfi-ip]"
     echo "                           适用于需要通过网关路由本地IP的场景"
+    echo "                           注意: 脚本退出时会自动清理配置的静态路由"
     echo ""
     echo "UDP网络错误处理选项 🆕:"
     echo "  --network-retry-delay=SEC  网络错误重试延迟(秒) (默认: 1.0)"
@@ -256,6 +258,7 @@ configure_static_route() {
     existing_route=$(ip route show "$LOCAL_IP/32" 2>/dev/null | grep "via $NEXFI_IP" || true)
     if [[ -n "$existing_route" ]]; then
         print_info "静态路由已存在: $existing_route"
+        CONFIGURED_STATIC_ROUTE="$existing_route"
         return 0
     fi
     
@@ -274,6 +277,7 @@ configure_static_route() {
     if sudo $route_cmd 2>/dev/null; then
         print_success "静态路由配置成功"
         print_info "路由信息: $(ip route show "$LOCAL_IP/32" 2>/dev/null || echo '未找到路由信息')"
+        CONFIGURED_STATIC_ROUTE="$route_cmd"
     else
         print_error "静态路由配置失败"
         print_warning "请检查:"
@@ -293,6 +297,40 @@ configure_static_route() {
     fi
     
     return 0
+}
+
+# 清理静态路由 🆕
+cleanup_static_route() {
+    if [[ "$ENABLE_STATIC_ROUTE" != "true" || -z "$CONFIGURED_STATIC_ROUTE" ]]; then
+        return 0
+    fi
+    
+    print_info "清理静态路由配置..."
+    
+    # 检查路由是否仍然存在
+    existing_route=$(ip route show "$LOCAL_IP/32" 2>/dev/null | grep "via $NEXFI_IP" || true)
+    if [[ -z "$existing_route" ]]; then
+        print_info "静态路由已不存在，无需清理"
+        return 0
+    fi
+    
+    # 删除静态路由
+    cleanup_cmd="ip route del $LOCAL_IP/32 via $NEXFI_IP"
+    print_info "执行路由清理: $cleanup_cmd"
+    
+    if sudo $cleanup_cmd 2>/dev/null; then
+        print_success "静态路由清理成功"
+    else
+        print_warning "静态路由清理失败，可能需要手动清理"
+        print_warning "手动清理命令: sudo $cleanup_cmd"
+    fi
+}
+
+# 清理函数 - 脚本退出时调用 🆕
+cleanup_on_exit() {
+    print_info "正在清理资源..."
+    cleanup_static_route
+    print_info "资源清理完成"
 }
 
 # 显示配置信息
@@ -370,7 +408,7 @@ show_config() {
     echo "静态路由配置 🆕:"
     echo "启用静态路由:  $ENABLE_STATIC_ROUTE"
     if [[ "$ENABLE_STATIC_ROUTE" == "true" ]]; then
-        echo "路由规则:     ip route add $LOCAL_IP/32 via $NEXFI_IP"
+        echo "路由规则:     $CONFIGURED_STATIC_ROUTE"
         echo "说明:         配置本地IP到Nexfi网关的静态路由"
     fi
     echo "=========================================="
@@ -591,6 +629,9 @@ parse_args() {
 
 # 主函数
 main() {
+    # 设置退出时清理 🆕
+    trap cleanup_on_exit EXIT INT TERM
+    
     # 解析参数
     parse_args "$@"
     
