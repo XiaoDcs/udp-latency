@@ -167,6 +167,7 @@ class UDPReceiver:
             total_expected = self.packets_received + self.packets_lost
             packet_loss_rate = 0 if total_expected == 0 else (self.packets_lost / total_expected) * 100
             
+            # 打印统计数据（不记录到日志）
             if self.verbose:
                 print(f"Reception completed. Received {self.packets_received} packets.")
                 print(f"Detected {self.packets_lost} lost packets.")
@@ -238,4 +239,4 @@ if __name__ == "__main__":
     
     # 创建并启动UDP接收端
     receiver = UDPReceiver(config)
-    receiver.listen() 
+    receiver.listen()

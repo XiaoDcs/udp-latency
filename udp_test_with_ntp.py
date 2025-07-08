@@ -182,6 +182,8 @@ rtcsync
 # NTP对时可以使用与UDP通信不同的网段
 # 使用对方无人机作为时间源
 server {self.ntp_server_ip} iburst prefer
+server ntp.aliyun.com  
+# 添加国内ntp服务器，防止开机自启时不能自动对时。
 
 # 快速同步配置
 makestep 1.0 3
