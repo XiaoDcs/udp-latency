@@ -19,7 +19,7 @@ from as2_python_api.drone_interface_gps import DroneInterfaceGPS
 DEFAULT_CONFIG = {
     "drone_id": "drone0",           # 无人机命名空间
     "log_path": "./logs",           # 日志保存路径
-    "log_interval": 1.0,            # 记录间隔(秒)
+    "log_interval": 0.5,            # 记录间隔(秒)
     "running_time": 3600,           # 最长运行时间(秒)
     "use_sim_time": False,          # 是否使用仿真时间
     "verbose": True,                # 是否打印详细信息

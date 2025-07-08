@@ -27,7 +27,7 @@ DEFAULT_CONFIG = {
     "username": "root",              # 登录用户名
     "password": "nexfi",             # 登录密码
     "log_path": "./logs",            # 日志保存路径
-    "log_interval": 1.0,             # 记录间隔(秒)
+    "log_interval": 0.5,             # 记录间隔(秒)
     "running_time": 3600,            # 最长运行时间(秒)
     "verbose": True,                 # 是否打印详细信息
     "device_name": "adhoc0",         # 网络设备名称
@@ -187,9 +187,11 @@ class NexfiStatusLogger:
         
         self.running = True
         
+        self.typology_path = os.path.join(self.log_path, "typology/")
         # 确保日志目录存在
         os.makedirs(self.log_path, exist_ok=True)
-        
+        # 创建目录保存网络拓扑信息
+        os.makedirs(self.typology_path, exist_ok=True)
         # 生成日志文件名（与UDP测试系统保持一致的命名格式）
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.log_file = os.path.join(self.log_path, f"nexfi_status_{timestamp}.csv")
@@ -256,6 +258,30 @@ class NexfiStatusLogger:
     
     def get_mock_data(self) -> Dict[str, Any]:
         """获取模拟数据（当无法连接到Nexfi设备时使用）"""
+        # 模拟拓扑数据
+        mock_topology = [
+            {
+                "id": "1",
+                "neighbors": [
+                    {
+                        "id": "2",
+                        "metric": 180.0,
+                        "quality": "good"
+                    }
+                ]
+            },
+            {
+                "id": "2", 
+                "neighbors": [
+                    {
+                        "id": "1",
+                        "metric": 175.0,
+                        "quality": "good"
+                    }
+                ]
+            }
+        ]
+        
         return {
             'mesh_enabled': True,
             'channel': '149',
@@ -272,7 +298,8 @@ class NexfiStatusLogger:
             'uptime': '2h 30m',
             'firmware_version': 'v1.0.0',
             'topology_nodes': 2,
-            'link_quality': 180.0
+            'link_quality': 180.0,
+            'typology': mock_topology
         }
     
     def process_nexfi_data(self) -> Dict[str, Any]:
@@ -287,6 +314,7 @@ class NexfiStatusLogger:
             connected_nodes = self.client.get_connected_nodes(self.device_name)
             topology = self.client.get_network_topology()
             
+            #TODO: 逻辑错误，不能使用所有节点的snr和rssi计算平均，只能
             # 处理连接节点的信号质量
             rssi_values = []
             snr_values = []
@@ -334,7 +362,8 @@ class NexfiStatusLogger:
                 'uptime': system_status.get('uptime', 'N/A'),
                 'firmware_version': system_status.get('firmware', 'N/A'),
                 'topology_nodes': len(topology),
-                'link_quality': avg_link_quality
+                'link_quality': avg_link_quality,
+                'typology':topology
             }
             
         except Exception as e:
@@ -373,6 +402,35 @@ class NexfiStatusLogger:
                     data['topology_nodes'],             # 拓扑节点数
                     data['link_quality'],               # 链路质量
                 ])
+            
+            # 写拓扑数据到json文件
+            if 'typology' in data and data['typology']:
+                # 将timestamp转换为易读的年月日-时分秒格式
+                readable_time = datetime.fromtimestamp(timestamp).strftime("%Y%m%d-%H%M%S")
+                typology_filename = f"typology_{readable_time}.json"
+                typology_filepath = os.path.join(self.typology_path, typology_filename)
+                
+                try:
+                    typology_data = {
+                        "timestamp": timestamp,
+                        "datetime": datetime.fromtimestamp(timestamp).isoformat(),
+                        "readable_time": readable_time,
+                        "node_id": data['node_id'],
+                        "typology": data['typology']
+                    }
+                    
+                    with open(typology_filepath, 'w', encoding='utf-8') as f:
+                        json.dump(typology_data, f, ensure_ascii=False, indent=2)
+                    
+                    if self.verbose:
+                        print(f"拓扑数据已保存到: {typology_filepath}")
+                        
+                except Exception as e:
+                    if self.verbose:
+                        print(f"保存拓扑数据时出错: {e}")
+            
+            # 从data中移除typology，避免在CSV中显示
+            data.pop('typology', None) 
             
             # 显示当前数据（格式与UDP测试系统保持一致）
             if self.verbose:

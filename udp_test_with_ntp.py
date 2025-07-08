@@ -182,6 +182,8 @@ rtcsync
 # NTP对时可以使用与UDP通信不同的网段
 # 使用对方无人机作为时间源
 server {self.ntp_server_ip} iburst prefer
+server ntp.aliyun.com  
+# 添加国内ntp服务器，防止开机自启时不能自动对时。
 
 # 快速同步配置
 makestep 1.0 3
@@ -317,14 +319,21 @@ rtcsync
     def verify_client_sync(self, timeout: int) -> bool:
         """验证客户端同步状态"""
         print(f"⏱️  正在验证时间同步状态 (超时: {timeout}秒)...")
-        start_time = time.time()
+        start_time = time.time()        
+        # 若存在系统时间更新，则会出现bug，例如，最开始取到的系统时间是0（由于amov下电关机后时间重置）
+        # 但在进行chronyc命令查询时，系统时间已经更新，故会导致time.time() - start_time 取得极大的值
+        # 目前我的处理方法是，若start_time 过于小（<50年,即<1.5768e9）,则认为start_time不合法，则会循环直到start_time>1.5768e9为止
+        if start_time < 1.5768e9:
+            print("⚠️  系统时间异常，等待系统时间更新...")
+            while start_time < 1.5768e9:
+                time.sleep(1)
+                start_time = time.time()  
         check_count = 0
-        
         while time.time() - start_time < timeout:
             check_count += 1
             try:
                 result = subprocess.run(['chronyc', 'sources', '-v'], 
-                                      capture_output=True, text=True, timeout=5)
+                                      capture_output=True, text=True, timeout=10)
                 lines = result.stdout.split('\n')
                 
                 print(f"🔍 第{check_count}次检查同步状态...")
@@ -856,9 +865,7 @@ class UDPTestManager:
             '--packet-size', str(self.config.get('packet_size', 1000)),
             '--frequency', str(self.config.get('frequency', 10)),
             '--time', str(self.config.get('running_time', 60)),
-            '--log-path', self.log_path,
-            '--network-retry-delay', str(self.config.get('network_retry_delay', 1.0)),
-            '--log-network-errors', str(self.config.get('log_network_errors', True)),
+            '--log-path', self.log_path
         ]
         
         try:
@@ -1073,12 +1080,6 @@ def main():
     parser.add_argument('--running-time', type=int, default=60,
                        help='运行时间(秒) (默认: 60)')
     
-    # UDP网络错误处理参数 🆕
-    parser.add_argument('--network-retry-delay', type=float, default=1.0,
-                       help='网络错误重试延迟(秒) (默认: 1.0)')
-    parser.add_argument('--log-network-errors', type=bool, default=True,
-                       help='是否记录网络错误到日志 (默认: True)')
-
     # UDP接收端参数
     parser.add_argument('--buffer-size', type=int, default=1500,
                        help='缓冲区大小(字节) (默认: 1500)')
@@ -1143,8 +1144,6 @@ def main():
         'enable_ntp': not args.skip_ntp,  # 默认启用NTP，除非明确跳过
         'ntp_peer_ip': args.ntp_peer_ip or args.peer_ip,  # 默认使用peer_ip
         'skip_ntp_config': args.skip_ntp_config,
-        'network_retry_delay': args.network_retry_delay,
-        'log_network_errors': args.log_network_errors,
     }
     
     # 调整接收端的端口配置

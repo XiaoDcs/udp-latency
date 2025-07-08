@@ -31,10 +31,6 @@ NEXFI_PASSWORD="nexfi"
 NEXFI_INTERVAL=1.0
 NEXFI_DEVICE="adhoc0"
 
-# UDP网络错误处理配置 🆕
-NETWORK_RETRY_DELAY=1.0
-LOG_NETWORK_ERRORS=true
-
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -98,11 +94,6 @@ show_help() {
     echo "  --nexfi-password=PASSWORD Nexfi服务器密码 (默认: nexfi)"
     echo "  --nexfi-interval=SEC     Nexfi记录间隔(秒) (默认: 1.0)"
     echo "  --nexfi-device=DEVICE    Nexfi设备名称 (默认: adhoc0)"
-    echo ""
-    echo "UDP网络错误处理选项 🆕:"
-    echo "  --network-retry-delay=SEC  网络错误重试延迟(秒) (默认: 1.0)"
-    echo "  --log-network-errors=BOOL  是否记录网络错误到日志 (默认: true)"
-    echo "                             适用于无人机飞行中网络间歇性中断的场景"
     echo ""
     echo "  -h, --help               显示帮助信息"
     echo ""
@@ -253,10 +244,6 @@ show_config() {
         echo "数据包大小:   $PACKET_SIZE 字节"
         echo "UDP通信时间:  $UDP_TIME 秒"
         echo "预计总时间:   ~$((UDP_TIME + 60)) 秒 (含准备时间)"
-        echo ""
-        echo "网络错误处理配置 🆕:"
-        echo "重试延迟:     $NETWORK_RETRY_DELAY 秒"
-        echo "记录网络错误: $LOG_NETWORK_ERRORS"
     else
         BUFFER_TIME=$((UDP_TIME > 300 ? UDP_TIME / 5 : 60))  # 20%缓冲或最少60秒
         TOTAL_RECEIVER_TIME=$((UDP_TIME + BUFFER_TIME))
@@ -370,9 +357,6 @@ run_test() {
     if [[ "$ENABLE_NEXFI" == "true" ]]; then
         cmd="$cmd --enable-nexfi --nexfi-ip=$NEXFI_IP --nexfi-username=$NEXFI_USERNAME --nexfi-password=$NEXFI_PASSWORD --nexfi-interval=$NEXFI_INTERVAL --nexfi-device=$NEXFI_DEVICE"
     fi
-    
-    # 添加网络错误处理参数
-    cmd="$cmd --network-retry-delay=$NETWORK_RETRY_DELAY --log-network-errors=$LOG_NETWORK_ERRORS"
     
     print_info "执行命令: $cmd"
     echo ""
@@ -495,14 +479,6 @@ parse_args() {
                 ;;
             --nexfi-device=*)
                 NEXFI_DEVICE="${1#*=}"
-                shift
-                ;;
-            --network-retry-delay=*)
-                NETWORK_RETRY_DELAY="${1#*=}"
-                shift
-                ;;
-            --log-network-errors=*)
-                LOG_NETWORK_ERRORS="${1#*=}"
                 shift
                 ;;
             -h|--help)
