@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # 默认配置参数
 DEFAULT_CONFIG = {
-    "nexfi_ip": "192.168.104.1",    # Nexfi设备IP地址
+    "nexfi_ip": "192.168.104.12",    # Nexfi设备IP地址
     "username": "root",              # 登录用户名
     "password": "nexfi",             # 登录密码
     "log_path": "./logs",            # 日志保存路径
@@ -315,7 +315,8 @@ class NexfiStatusLogger:
             connected_nodes = self.client.get_connected_nodes(self.device_name)
             topology = self.client.get_network_topology()
             
-            #TODO: 逻辑错误，不能使用所有节点的snr和rssi计算平均，只能
+            #TODO: connected_nodes中的node字典中没有nodeid字段，需要根据实际情况调整，
+            #      nodeid需要从其他地方获取，例如拓扑结构中
             # 处理连接节点的信号质量
             nodeinfo_list = []
             for node in connected_nodes:
