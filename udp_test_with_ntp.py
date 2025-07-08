@@ -327,7 +327,7 @@ rtcsync
                 time.sleep(1)
                 start_time = time.time()  
         check_count = 0
-        while time.time() - start_time < timeout or :
+        while time.time() - start_time < timeout:
             check_count += 1
             try:
                 result = subprocess.run(['chronyc', 'sources', '-v'], 

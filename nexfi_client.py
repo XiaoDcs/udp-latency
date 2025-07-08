@@ -290,10 +290,13 @@ class NexfiStatusLogger:
             # 处理连接节点的信号质量
             rssi_values = []
             snr_values = []
+            nodeinfo_list = []
             for node in connected_nodes:
                 try:
+                    name = node.get('name', 'unknown')
                     rssi = float(node.get('rssi', 0))
                     snr = float(node.get('snr', 0))
+                    nodeinfo_list.append({'name': name, 'rssi': rssi, 'snr': snr})
                     if rssi != 0:
                         rssi_values.append(rssi)
                     if snr != 0:
@@ -334,7 +337,8 @@ class NexfiStatusLogger:
                 'uptime': system_status.get('uptime', 'N/A'),
                 'firmware_version': system_status.get('firmware', 'N/A'),
                 'topology_nodes': len(topology),
-                'link_quality': avg_link_quality
+                'link_quality': avg_link_quality,
+                'nodeinfo_list': nodeinfo_list
             }
             
         except Exception as e:
@@ -372,6 +376,7 @@ class NexfiStatusLogger:
                     data['firmware_version'],           # 固件版本
                     data['topology_nodes'],             # 拓扑节点数
                     data['link_quality'],               # 链路质量
+                    data['nodeinfo_list']                # 节点信息列表
                 ])
             
             # 显示当前数据（格式与UDP测试系统保持一致）
@@ -513,4 +518,4 @@ def main():
 
 
 if __name__ == "__main__":
-    exit(main()) 
+    exit(main())

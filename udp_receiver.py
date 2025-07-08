@@ -55,22 +55,9 @@ class UDPReceiver:
         self.packets_received = 0
         self.packets_lost = 0
         
-        # 网络错误统计（轻量级改进）
-        self.network_errors = 0
-        
         # 创建UDP socket
         self._udp_socket = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
-        
-        try:
-            self._udp_socket.bind((self.local_ip, self.local_port))
-        except OSError as e:
-            print(f"❌ Failed to bind to {self.local_ip}:{self.local_port}")
-            print(f"   Error: {e}")
-            print(f"💡 Suggestions:")
-            print(f"   - Check if port {self.local_port} is already in use: netstat -ulnp | grep {self.local_port}")
-            print(f"   - Check if IP {self.local_ip} exists: ip addr show")
-            print(f"   - Try using 0.0.0.0 to listen on all interfaces")
-            raise
+        self._udp_socket.bind((self.local_ip, self.local_port))
         
         # 设置超时，以便定期检查是否应该停止
         self._udp_socket.settimeout(1.0)
@@ -173,39 +160,21 @@ class UDPReceiver:
                 except socket.timeout:
                     # 超时只是为了定期检查是否应该退出循环
                     continue
-                except OSError as e:
-                    # 处理网络相关错误（轻量级处理）
-                    self.network_errors += 1
-                    if self.verbose:
-                        print(f"⚠️  Network error: {e}")
-                    # 对于receiver，网络错误通常是临时的，继续监听
-                    continue
                 except Exception as e:
                     print(f"Error receiving packet: {e}")
-                    # 其他错误也继续运行
             
             # 计算总丢包率
             total_expected = self.packets_received + self.packets_lost
             packet_loss_rate = 0 if total_expected == 0 else (self.packets_lost / total_expected) * 100
             
             if self.verbose:
-                print(f"📊 Reception completed!")
-                print(f"   Packets received: {self.packets_received}")
-                print(f"   Packets lost: {self.packets_lost}")
-                print(f"   Network errors: {self.network_errors}")
-                print(f"   Packet loss rate: {packet_loss_rate:.2f}%")
-                print(f"   Log saved to {self.log_file}")
+                print(f"Reception completed. Received {self.packets_received} packets.")
+                print(f"Detected {self.packets_lost} lost packets.")
+                print(f"Packet loss rate: {packet_loss_rate:.2f}%")
+                print(f"Log saved to {self.log_file}")
         
         except KeyboardInterrupt:
-            if self.verbose:
-                total_expected = self.packets_received + self.packets_lost
-                packet_loss_rate = 0 if total_expected == 0 else (self.packets_lost / total_expected) * 100
-                print(f"\n⚡ Reception interrupted by user!")
-                print(f"   Packets received: {self.packets_received}")
-                print(f"   Packets lost: {self.packets_lost}")
-                print(f"   Network errors: {self.network_errors}")
-                print(f"   Packet loss rate: {packet_loss_rate:.2f}%")
-                print(f"   Log saved to {self.log_file}")
+            print("\nReception interrupted by user.")
         finally:
             self._udp_socket.close()
     
