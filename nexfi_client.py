@@ -416,6 +416,8 @@ class NexfiStatusLogger:
                         data['topology_nodes'],
                         data['link_quality']
                     ])
+        except Exception as e:
+            print(f"记录Nexfi状态数据时出错: {e}")
         
         # 写拓扑数据到json文件
         if 'typology' in data and data['typology']:
@@ -454,9 +456,7 @@ class NexfiStatusLogger:
                   f"SNR: {data['avg_snr']:.1f}dB, "
                   f"Throughput: {data['throughput']}")
                 
-        except Exception as e:
-            print(f"记录Nexfi状态数据时出错: {e}")
-    
+        
     def run(self):
         """运行Nexfi状态数据记录"""
         if self.verbose:
