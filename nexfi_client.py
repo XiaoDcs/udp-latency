@@ -320,10 +320,10 @@ class NexfiStatusLogger:
             nodeinfo_list = []
             for node in connected_nodes:
                 try:
-                    name = node.get('name', 'unknown')
+                    nodeid = node.get('nodeid', 'unknown')
                     rssi = float(node.get('rssi', 0))
                     snr = float(node.get('snr', 0))
-                    nodeinfo_list.append({'name': name, 'rssi': rssi, 'snr': snr})
+                    nodeinfo_list.append({'nodeid': nodeid, 'rssi': rssi, 'snr': snr})
                 except (ValueError, TypeError):
                     continue
             
@@ -386,7 +386,7 @@ class NexfiStatusLogger:
                             data['work_mode'],                  # 工作模式
                             data['node_id'],                    # 本节点ID
                             data['connected_nodes'],            # 连接节点数
-                            node.get('name', ''),               # 连接的节点ID
+                            node.get('nodeid', ''),               # 连接的节点ID
                             node.get('rssi', ''),               # rssi
                             node.get('snr', ''),                # snr
                             data['throughput'],                 # 吞吐量
