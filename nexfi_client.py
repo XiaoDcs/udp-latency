@@ -357,7 +357,7 @@ class NexfiStatusLogger:
                 'topology_nodes': len(topology),
                 'link_quality': avg_link_quality,
                 'nodeinfo_list': nodeinfo_list,
-                'typology':topology
+                'typology': topology
             }
             
         except Exception as e:
@@ -370,68 +370,89 @@ class NexfiStatusLogger:
         try:
             # 获取时间戳（使用Unix时间戳，与UDP测试系统保持一致）
             timestamp = time.time()
-            
             # 获取处理后的Nexfi数据
             data = self.process_nexfi_data()
-            
-            # 写入CSV文件
+            # 写入CSV文件，每个连接节点写一行
             with open(self.log_file, 'a', newline='') as csvfile:
                 writer = csv.writer(csvfile)
-                writer.writerow([
-                    timestamp,                          # Unix时间戳
-                    data['mesh_enabled'],               # Mesh启用状态
-                    data['channel'],                    # 信道
-                    data['frequency_band'],             # 频宽
-                    data['tx_power'],                   # 发射功率
-                    data['work_mode'],                  # 工作模式
-                    data['node_id'],                    # 节点ID
-                    data['connected_nodes'],            # 连接节点数
-                    data['throughput'],                 # 吞吐量
-                    data['cpu_usage'],                  # CPU使用率
-                    data['memory_usage'],               # 内存使用率
-                    data['uptime'],                     # 运行时间
-                    data['firmware_version'],           # 固件版本
-                    data['topology_nodes'],             # 拓扑节点数
-                    data['link_quality'],               # 链路质量
-                    data['nodeinfo_list']                # 节点信息列表
-                ])
+                if data['nodeinfo_list']:
+                    for node in data['nodeinfo_list']:
+                        writer.writerow([
+                            timestamp,                          # Unix时间戳
+                            data['mesh_enabled'],               # Mesh启用状态
+                            data['channel'],                    # 信道
+                            data['frequency_band'],             # 频宽
+                            data['tx_power'],                   # 发射功率
+                            data['work_mode'],                  # 工作模式
+                            data['node_id'],                    # 本节点ID
+                            data['connected_nodes'],            # 连接节点数
+                            node.get('name', ''),               # 连接的节点ID
+                            node.get('rssi', ''),               # rssi
+                            node.get('snr', ''),                # snr
+                            data['throughput'],                 # 吞吐量
+                            data['cpu_usage'],                  # CPU使用率
+                            data['memory_usage'],               # 内存使用率
+                            data['uptime'],                     # 运行时间
+                            data['firmware_version'],           # 固件版本
+                            data['topology_nodes'],             # 拓扑节点数
+                            data['link_quality']                # 链路质量
+                        ])
+                else:
+                    writer.writerow([
+                        timestamp,
+                        data['mesh_enabled'],
+                        data['channel'],
+                        data['frequency_band'],
+                        data['tx_power'],
+                        data['work_mode'],
+                        data['node_id'],
+                        data['connected_nodes'],
+                        '', '', '',
+                        data['throughput'],
+                        data['cpu_usage'],
+                        data['memory_usage'],
+                        data['uptime'],
+                        data['firmware_version'],
+                        data['topology_nodes'],
+                        data['link_quality']
+                    ])
+        
+        # 写拓扑数据到json文件
+        if 'typology' in data and data['typology']:
+            # 将timestamp转换为易读的年月日-时分秒格式
+            readable_time = datetime.fromtimestamp(timestamp).strftime("%Y%m%d-%H%M%S")
+            typology_filename = f"typology_{readable_time}.json"
+            typology_filepath = os.path.join(self.typology_path, typology_filename)
             
-            # 写拓扑数据到json文件
-            if 'typology' in data and data['typology']:
-                # 将timestamp转换为易读的年月日-时分秒格式
-                readable_time = datetime.fromtimestamp(timestamp).strftime("%Y%m%d-%H%M%S")
-                typology_filename = f"typology_{readable_time}.json"
-                typology_filepath = os.path.join(self.typology_path, typology_filename)
+            try:
+                typology_data = {
+                    "timestamp": timestamp,
+                    "datetime": datetime.fromtimestamp(timestamp).isoformat(),
+                    "readable_time": readable_time,
+                    "node_id": data['node_id'],
+                    "typology": data['typology']
+                }
                 
-                try:
-                    typology_data = {
-                        "timestamp": timestamp,
-                        "datetime": datetime.fromtimestamp(timestamp).isoformat(),
-                        "readable_time": readable_time,
-                        "node_id": data['node_id'],
-                        "typology": data['typology']
-                    }
+                with open(typology_filepath, 'w', encoding='utf-8') as f:
+                    json.dump(typology_data, f, ensure_ascii=False, indent=2)
+                
+                if self.verbose:
+                    print(f"拓扑数据已保存到: {typology_filepath}")
                     
-                    with open(typology_filepath, 'w', encoding='utf-8') as f:
-                        json.dump(typology_data, f, ensure_ascii=False, indent=2)
-                    
-                    if self.verbose:
-                        print(f"拓扑数据已保存到: {typology_filepath}")
-                        
-                except Exception as e:
-                    if self.verbose:
-                        print(f"保存拓扑数据时出错: {e}")
-            
-            # 从data中移除typology，避免在CSV中显示
-            data.pop('typology', None) 
-            
-            # 显示当前数据（格式与UDP测试系统保持一致）
-            if self.verbose:
-                print(f"Nexfi logged at {timestamp:.6f}: "
-                      f"Nodes: {data['connected_nodes']}, "
-                      f"RSSI: {data['avg_rssi']:.1f}dBm, "
-                      f"SNR: {data['avg_snr']:.1f}dB, "
-                      f"Throughput: {data['throughput']}")
+            except Exception as e:
+                if self.verbose:
+                    print(f"保存拓扑数据时出错: {e}")
+        
+        # 从data中移除typology，避免在CSV中显示
+        data.pop('typology', None) 
+        
+        # 显示当前数据（格式与UDP测试系统保持一致）
+        if self.verbose:
+            print(f"Nexfi logged at {timestamp:.6f}: "
+                  f"Nodes: {data['connected_nodes']}, "
+                  f"RSSI: {data['avg_rssi']:.1f}dBm, "
+                  f"SNR: {data['avg_snr']:.1f}dB, "
+                  f"Throughput: {data['throughput']}")
                 
         except Exception as e:
             print(f"记录Nexfi状态数据时出错: {e}")
