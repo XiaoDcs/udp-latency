@@ -1,8 +1,0 @@
-source venv/bin/activate
-
-source /opt/ros/humble/setup.bash 
-source /home/amov/aerostack2_ws/install/setup.bash
-
-./start_test.sh sender --local-ip=192.168.104.112 --peer-ip=192.168.104.109 --enable-nexfi --nexfi-ip=192.168.104.12 --time=300 --enable-gps --drone-id=drone0
-
-

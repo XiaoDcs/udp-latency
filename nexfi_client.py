@@ -240,8 +240,9 @@ class NexfiStatusLogger:
                     'work_mode',           # 工作模式
                     'node_id',             # 节点ID
                     'connected_nodes',     # 连接的节点数量
-                    'avg_rssi',            # 平均信号强度
-                    'avg_snr',             # 平均信噪比
+                    'connected_node_id',   # 连接的节点ID
+                    'rssi',                # 平均信号强度(dBm)
+                    'snr',                 # 信噪比
                     'throughput',          # 吞吐量(Mbps)
                     'cpu_usage',           # CPU使用率
                     'memory_usage',        # 内存使用率
@@ -316,8 +317,6 @@ class NexfiStatusLogger:
             
             #TODO: 逻辑错误，不能使用所有节点的snr和rssi计算平均，只能
             # 处理连接节点的信号质量
-            rssi_values = []
-            snr_values = []
             nodeinfo_list = []
             for node in connected_nodes:
                 try:
@@ -325,15 +324,8 @@ class NexfiStatusLogger:
                     rssi = float(node.get('rssi', 0))
                     snr = float(node.get('snr', 0))
                     nodeinfo_list.append({'name': name, 'rssi': rssi, 'snr': snr})
-                    if rssi != 0:
-                        rssi_values.append(rssi)
-                    if snr != 0:
-                        snr_values.append(snr)
                 except (ValueError, TypeError):
                     continue
-            
-            avg_rssi = sum(rssi_values) / len(rssi_values) if rssi_values else 0.0
-            avg_snr = sum(snr_values) / len(snr_values) if snr_values else 0.0
             
             # 处理拓扑信息，计算平均链路质量
             link_qualities = []
@@ -357,8 +349,6 @@ class NexfiStatusLogger:
                 'work_mode': mesh_info.get('mode', 'N/A'),
                 'node_id': mesh_info.get('nodeid', 'N/A'),
                 'connected_nodes': len(connected_nodes),
-                'avg_rssi': avg_rssi,
-                'avg_snr': avg_snr,
                 'throughput': system_status.get('throughput', 'N/A'),
                 'cpu_usage': system_status.get('cpu', 'N/A'),
                 'memory_usage': system_status.get('memory', 'N/A'),
@@ -366,7 +356,7 @@ class NexfiStatusLogger:
                 'firmware_version': system_status.get('firmware', 'N/A'),
                 'topology_nodes': len(topology),
                 'link_quality': avg_link_quality,
-                'nodeinfo_list': nodeinfo_list
+                'nodeinfo_list': nodeinfo_list,
                 'typology':topology
             }
             
@@ -396,8 +386,6 @@ class NexfiStatusLogger:
                     data['work_mode'],                  # 工作模式
                     data['node_id'],                    # 节点ID
                     data['connected_nodes'],            # 连接节点数
-                    data['avg_rssi'],                   # 平均RSSI
-                    data['avg_snr'],                    # 平均SNR
                     data['throughput'],                 # 吞吐量
                     data['cpu_usage'],                  # CPU使用率
                     data['memory_usage'],               # 内存使用率
