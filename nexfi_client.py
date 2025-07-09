@@ -318,27 +318,49 @@ class NexfiStatusLogger:
             #TODO: connected_nodes中的node字典中没有nodeid字段，需要根据实际情况调整，
             #      nodeid需要从其他地方获取，例如拓扑结构中
             # 处理连接节点的信号质量
+            self_id = mesh_info.get('nodeid', 'N/A')
             nodeinfo_list = []
-            for node in connected_nodes:
+            for node in connected_nodes:      # 这里只提供了mac地址和snr，rssi的对应关系
                 try:
-                    nodeid = node.get('nodeid', 'unknown')
+                    macaddr = node.get('primary', 'N/A')
                     rssi = float(node.get('rssi', 0))
                     snr = float(node.get('snr', 0))
-                    nodeinfo_list.append({'nodeid': nodeid, 'rssi': rssi, 'snr': snr})
+                    nodeinfo_list.append({'macaddr': macaddr, 'rssi': rssi, 'snr': snr})
                 except (ValueError, TypeError):
                     continue
             
             # 处理拓扑信息，计算平均链路质量
             link_qualities = []
             for node in topology:
-                neighbors = node.get('neighbors', [])
-                for neighbor in neighbors:
-                    try:
-                        metric = float(neighbor.get('metric', 0))
-                        if metric > 0:
-                            link_qualities.append(metric)
-                    except (ValueError, TypeError):
-                        continue
+                if node.get('nodeid') == self_id:   # 只处理自己的邻居节点
+                    neighbors = node.get('neighbors', [])
+                    for neighbor in neighbors:
+                        try:
+                            neighbor_mac = neighbor.get('neighbor')
+                            # 检查neighbor的MAC地址是否在nodeinfo_list中
+                            if any(node_info.get('macaddr') == neighbor_mac for node_info in nodeinfo_list):
+                                # 只处理存在于nodeinfo_list中的邻居节点
+                                for node1 in topology:
+                                    if node1.get('primary') == neighbor_mac:
+                                        # 向nodeinfo_list中添加nodeid信息
+                                        neighbor_nodeid = node1.get('nodeid')
+                                        for node_info in nodeinfo_list:
+                                            if node_info.get('macaddr') == neighbor_mac:
+                                                node_info['nodeid'] = neighbor_nodeid
+                                                break
+                                        break
+                        except Exception as e:
+                            if self.verbose:
+                                print(f"处理邻居节点时出错: {e}")
+                            continue
+                        try:
+                            metric = float(neighbor.get('metric', 0))
+                            if metric > 0:
+                                link_qualities.append(metric)
+                        except (ValueError, TypeError):
+                            continue
+                else:
+                    pass  # 只处理本节点的邻居
             
             avg_link_quality = sum(link_qualities) / len(link_qualities) if link_qualities else 0.0
             
