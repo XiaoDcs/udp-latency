@@ -322,7 +322,7 @@ class NexfiStatusLogger:
             nodeinfo_list = []
             for node in connected_nodes:      # 这里只提供了mac地址和snr，rssi的对应关系
                 try:
-                    macaddr = node.get('primary', 'N/A')
+                    macaddr = node.get('primary', 'N/A').lower()
                     rssi = float(node.get('rssi', 0))
                     snr = float(node.get('snr', 0))
                     nodeinfo_list.append({'macaddr': macaddr, 'rssi': rssi, 'snr': snr})
@@ -336,12 +336,12 @@ class NexfiStatusLogger:
                     neighbors = node.get('neighbors', [])
                     for neighbor in neighbors:
                         try:
-                            neighbor_mac = neighbor.get('neighbor')
+                            neighbor_mac = neighbor.get('neighbor', '').lower()
                             # 检查neighbor的MAC地址是否在nodeinfo_list中
                             if any(node_info.get('macaddr') == neighbor_mac for node_info in nodeinfo_list):
                                 # 只处理存在于nodeinfo_list中的邻居节点
                                 for node1 in topology:
-                                    if node1.get('primary') == neighbor_mac:
+                                    if node1.get('primary', '').lower() == neighbor_mac:
                                         # 向nodeinfo_list中添加nodeid信息
                                         neighbor_nodeid = node1.get('nodeid')
                                         for node_info in nodeinfo_list:
