@@ -15,6 +15,23 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 from as2_python_api.drone_interface_gps import DroneInterfaceGPS
 
+# Monkey patch: ensure as2_python_api's GpsModule implements __call__ at runtime.
+try:
+    from as2_python_api.modules.gps_module import GpsModule
+except Exception:
+    GpsModule = None
+else:
+    if '__call__' not in GpsModule.__dict__:
+        def _gps_module_call(self, *args, **kwargs):
+            return True
+
+        setattr(GpsModule, '__call__', _gps_module_call)
+        abstract_methods = getattr(GpsModule, '__abstractmethods__', set())
+        if '__call__' in abstract_methods:
+            remaining = set(abstract_methods)
+            remaining.discard('__call__')
+            GpsModule.__abstractmethods__ = frozenset(remaining)
+
 # 默认配置参数
 DEFAULT_CONFIG = {
     "drone_id": "drone0",           # 无人机命名空间

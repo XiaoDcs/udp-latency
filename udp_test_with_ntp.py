@@ -616,6 +616,7 @@ class UDPTestManager:
         self.nexfi_password = config.get('nexfi_password', 'nexfi')
         self.nexfi_interval = config.get('nexfi_interval', 1.0)
         self.nexfi_device = config.get('nexfi_device', 'adhoc0')
+        self.nexfi_bat_interface = config.get('nexfi_bat_interface', 'bat0')
     
     def setup_logging(self):
         """设置日志"""
@@ -738,6 +739,7 @@ class UDPTestManager:
                 '--interval', str(self.nexfi_interval),
                 '--time', str(total_nexfi_time),
                 '--device', self.nexfi_device,
+                '--bat-interface', self.nexfi_bat_interface,
                 '--verbose', 'true'
             ]
             
@@ -1107,6 +1109,8 @@ def main():
                        help='Nexfi记录间隔(秒) (默认: 1.0)')
     parser.add_argument('--nexfi-device', default='adhoc0',
                        help='Nexfi设备名称 (默认: adhoc0)')
+    parser.add_argument('--nexfi-bat-interface', default='bat0',
+                       help='Nexfi batman-adv接口名称 (默认: bat0)')
     
     # NTP时间同步参数
     parser.add_argument('--skip-ntp', action='store_true',
@@ -1141,6 +1145,7 @@ def main():
         'nexfi_password': args.nexfi_password,
         'nexfi_interval': args.nexfi_interval,
         'nexfi_device': args.nexfi_device,
+        'nexfi_bat_interface': args.nexfi_bat_interface,
         'enable_ntp': not args.skip_ntp,  # 默认启用NTP，除非明确跳过
         'ntp_peer_ip': args.ntp_peer_ip or args.peer_ip,  # 默认使用peer_ip
         'skip_ntp_config': args.skip_ntp_config,

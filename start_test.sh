@@ -30,6 +30,7 @@ NEXFI_USERNAME="root"
 NEXFI_PASSWORD="nexfi"
 NEXFI_INTERVAL=1.0
 NEXFI_DEVICE="adhoc0"
+NEXFI_BAT_INTERFACE="bat0"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -94,6 +95,7 @@ show_help() {
     echo "  --nexfi-password=PASSWORD Nexfi服务器密码 (默认: nexfi)"
     echo "  --nexfi-interval=SEC     Nexfi记录间隔(秒) (默认: 1.0)"
     echo "  --nexfi-device=DEVICE    Nexfi设备名称 (默认: adhoc0)"
+    echo "  --nexfi-bat-interface=IF  Nexfi batman-adv接口 (默认: bat0)"
     echo ""
     echo "  -h, --help               显示帮助信息"
     echo ""
@@ -355,7 +357,7 @@ run_test() {
     
     # 添加Nexfi通信状态记录参数
     if [[ "$ENABLE_NEXFI" == "true" ]]; then
-        cmd="$cmd --enable-nexfi --nexfi-ip=$NEXFI_IP --nexfi-username=$NEXFI_USERNAME --nexfi-password=$NEXFI_PASSWORD --nexfi-interval=$NEXFI_INTERVAL --nexfi-device=$NEXFI_DEVICE"
+        cmd="$cmd --enable-nexfi --nexfi-ip=$NEXFI_IP --nexfi-username=$NEXFI_USERNAME --nexfi-password=$NEXFI_PASSWORD --nexfi-interval=$NEXFI_INTERVAL --nexfi-device=$NEXFI_DEVICE --nexfi-bat-interface=$NEXFI_BAT_INTERFACE"
     fi
     
     print_info "执行命令: $cmd"
@@ -479,6 +481,10 @@ parse_args() {
                 ;;
             --nexfi-device=*)
                 NEXFI_DEVICE="${1#*=}"
+                shift
+                ;;
+            --nexfi-bat-interface=*)
+                NEXFI_BAT_INTERFACE="${1#*=}"
                 shift
                 ;;
             -h|--help)

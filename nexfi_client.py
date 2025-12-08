@@ -31,13 +31,21 @@ DEFAULT_CONFIG = {
     "running_time": 3600,            # 最长运行时间(秒)
     "verbose": True,                 # 是否打印详细信息
     "device_name": "adhoc0",         # 网络设备名称
+    "bat_interface": "bat0",        # batman-adv接口
 }
 
 
 class NexfiClient:
     """Nexfi通信模块客户端类"""
     
-    def __init__(self, api_url: str = "192.168.104.1", username: str = "root", password: str = "nexfi"):
+    def __init__(
+        self,
+        api_url: str = "192.168.104.1",
+        username: str = "root",
+        password: str = "nexfi",
+        device_name: str = "adhoc0",
+        bat_interface: str = "bat0",
+    ):
         """
         初始化Nexfi客户端
         
@@ -50,7 +58,23 @@ class NexfiClient:
         self.username = username
         self.password = password
         self.session = None
+        self.device_name = device_name
+        self.bat_interface = bat_interface
         self._login()
+    
+    def _candidate_devices(self) -> List[str]:
+        candidates = [self.device_name, "mesh0", "adhoc0", "wlan0"]
+        seen = set()
+        ordered = []
+        for dev in candidates:
+            if dev and dev not in seen:
+                seen.add(dev)
+                ordered.append(dev)
+        return ordered
+
+    @staticmethod
+    def _is_error_response(result: Optional[Dict[str, Any]]) -> bool:
+        return isinstance(result, dict) and "__error__" in result
     
     def _login(self) -> None:
         """登录并获取会话ID"""
@@ -87,6 +111,181 @@ class NexfiClient:
             logger.error(f"Failed to login: {e}")
             raise Exception("Failed to create session")
     
+    def _normalize_response_payload(self, payload: Any) -> Any:
+        """Handle Nexfi firmwares that wrap JSON data inside stdout strings."""
+        if not isinstance(payload, dict):
+            return payload
+
+        stdout_content = payload.get("stdout")
+        if isinstance(stdout_content, str):
+            stripped = stdout_content.strip()
+            if stripped:
+                try:
+                    parsed = json.loads(stripped)
+                    combined = dict(payload)
+                    if isinstance(parsed, dict):
+                        combined.update(parsed)
+                    combined["stdout_parsed"] = parsed
+                    return combined
+                except json.JSONDecodeError:
+                    logger.debug("Failed to parse stdout JSON snippet: %s", stripped[:120])
+        return payload
+    
+    def _parse_json_string(self, raw: str) -> Optional[Any]:
+        if not isinstance(raw, str):
+            return None
+        stripped = raw.strip()
+        if not stripped:
+            return None
+        try:
+            return json.loads(stripped)
+        except json.JSONDecodeError:
+            logger.debug("Failed to decode JSON string: %s", stripped[:120])
+            return None
+
+    def _extract_result_payload(self, response_json: Dict[str, Any]) -> Optional[Any]:
+        if "error" in response_json:
+            return {"__error__": response_json["error"]}
+
+        payload = response_json.get("result")
+        if payload is None:
+            return None
+
+        if isinstance(payload, list):
+            # ubus responses often look like [0, { ... }] ; iterate反向可直接拿到字典
+            for item in reversed(payload):
+                if isinstance(item, dict):
+                    return self._normalize_response_payload(item)
+                if isinstance(item, str):
+                    parsed = self._parse_json_string(item)
+                    if parsed is not None:
+                        return parsed if isinstance(parsed, dict) else {"data": parsed}
+            return None
+
+        if isinstance(payload, dict):
+            return self._normalize_response_payload(payload)
+
+        if isinstance(payload, str):
+            parsed = self._parse_json_string(payload)
+            if parsed is not None:
+                return parsed if isinstance(parsed, dict) else {"data": parsed}
+
+        return None
+
+    def _call_file_exec(self, command: str, params: Optional[List[str]] = None, env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+        payload = {
+            "command": command,
+            "params": params or [],
+            "env": env or {},
+        }
+        return self._make_request("file", "exec", payload)
+
+    def _get_system_status_fallback(self) -> Dict[str, Any]:
+        system_info = self._make_request("system", "info")
+        board_info = self._make_request("system", "board")
+
+        if self._is_error_response(system_info):
+            system_info = {}
+        if self._is_error_response(board_info):
+            board_info = {}
+
+        load_avg = system_info.get("load", [])
+        cpu_usage = "N/A"
+        if load_avg:
+            cpu_usage = f"{(load_avg[0] / 65535.0) * 100:.1f}%"
+
+        memory = system_info.get("memory", {})
+        memory_usage = "N/A"
+        total_mem = memory.get("total")
+        free_mem = memory.get("free")
+        if total_mem:
+            used = total_mem - (free_mem or 0)
+            memory_usage = f"{(used / total_mem) * 100:.1f}%"
+
+        uptime_seconds = system_info.get("uptime")
+        uptime = f"{uptime_seconds}s" if uptime_seconds is not None else "N/A"
+
+        release = board_info.get("release", {})
+        firmware_version = release.get("description") or release.get("version") or board_info.get("kernel", "N/A")
+
+        return {
+            "throughput": "N/A",
+            "cpu": cpu_usage,
+            "memory": memory_usage,
+            "uptime": uptime,
+            "firmware": firmware_version,
+        }
+
+    def _get_mesh_info_fallback(self) -> Dict[str, Any]:
+        wifi_info: Optional[Dict[str, Any]] = None
+        device_used = None
+        for dev in self._candidate_devices():
+            response = self._make_request("iwinfo", "info", {"device": dev})
+            if response and not self._is_error_response(response):
+                wifi_info = response
+                device_used = dev
+                break
+
+        if not wifi_info:
+            return {}
+
+        interface_name = self.bat_interface or "bat0"
+        network_info = self._make_request(f"network.interface.{interface_name}", "status")
+        if self._is_error_response(network_info):
+            network_info = {}
+
+        disabled_flag = '0'
+        if isinstance(network_info, dict) and not network_info.get('up', True):
+            disabled_flag = '1'
+
+        return {
+            "mode": wifi_info.get("mode"),
+            "channel": wifi_info.get("channel"),
+            "chanbw": wifi_info.get("htmode"),
+            "txpower": wifi_info.get("txpower"),
+            "nodeid": wifi_info.get("bssid"),
+            "primary": wifi_info.get("bssid"),
+            "device": device_used,
+            "disabled": disabled_flag,
+        }
+
+    def _format_assoc_entry(self, entry: Dict[str, Any], device: str) -> Dict[str, Any]:
+        signal = entry.get("signal")
+        noise = entry.get("noise")
+        snr = None
+        if isinstance(signal, (int, float)) and isinstance(noise, (int, float)):
+            snr = signal - noise
+        return {
+            "primary": entry.get("mac", "").lower(),
+            "rssi": signal,
+            "snr": snr,
+            "device": device,
+            "raw": entry,
+        }
+
+    def _get_connected_nodes_fallback(self) -> List[Dict[str, Any]]:
+        for dev in self._candidate_devices():
+            response = self._make_request("iwinfo", "assoclist", {"device": dev})
+            if not response or self._is_error_response(response):
+                continue
+            result_list = response.get("results")
+            if isinstance(result_list, list) and result_list:
+                return [self._format_assoc_entry(entry, dev) for entry in result_list]
+        return []
+
+    def _get_network_topology_fallback(self) -> List[Dict[str, Any]]:
+        response = self._call_file_exec("/usr/sbin/batadv-vis", ["-f", "jsondoc"])
+        if not response or self._is_error_response(response):
+            return []
+
+        if isinstance(response.get("vis"), list):
+            return response.get("vis", [])
+
+        stdout_parsed = response.get("stdout_parsed")
+        if isinstance(stdout_parsed, dict) and isinstance(stdout_parsed.get("vis"), list):
+            return stdout_parsed.get("vis", [])
+        return []
+
     def _make_request(self, service: str, method: str, params: Dict = None, max_retries: int = 3) -> Dict:
         """
         发送API请求的通用方法
@@ -128,12 +327,12 @@ class NexfiClient:
                     continue
                 
                 # 检查响应格式
-                if "result" in result and len(result["result"]) > 1:
-                    return result["result"][1]
-                else:
-                    if i == max_retries - 1:
-                        logger.warning(f"Invalid response format from {service}.{method}")
-                    continue
+                payload = self._extract_result_payload(result)
+                if payload is not None:
+                    return payload
+                if i == max_retries - 1:
+                    logger.warning(f"Invalid response format from {service}.{method}")
+                continue
                     
             except requests.exceptions.RequestException as e:
                 if i == max_retries - 1:
@@ -149,21 +348,48 @@ class NexfiClient:
     
     def get_system_status(self) -> Dict:
         """获取系统状态"""
-        return self._make_request("nexfi.system", "status")
+        result = self._make_request("nexfi.system", "status")
+        if result and not self._is_error_response(result):
+            return result
+        return self._get_system_status_fallback()
     
     def get_mesh_info(self) -> Dict:
         """获取Nexfi Mesh信息"""
-        return self._make_request("nexfi.mesh", "status")
+        result = self._make_request("nexfi.mesh", "status")
+        if result and not self._is_error_response(result):
+            return result
+        return self._get_mesh_info_fallback()
     
     def get_connected_nodes(self, device: str = "adhoc0") -> List[Dict]:
         """获取已连接站点列表"""
         result = self._make_request("nexfi.mesh", "sites", {"device": device})
-        return result.get("results", [])
-    
+        candidates: List[Dict[str, Any]] = []
+        if isinstance(result, list):
+            candidates = result
+        elif isinstance(result, dict) and not self._is_error_response(result):
+            for key in ("results", "sites", "nodes", "data"):
+                value = result.get(key)
+                if isinstance(value, list):
+                    candidates = value
+                    break
+
+        if candidates:
+            return candidates
+        return self._get_connected_nodes_fallback()
+
     def get_network_topology(self) -> List[Dict]:
         """获取网络拓扑"""
         result = self._make_request("nexfi.mesh", "vis")
-        return result.get("vis", [])
+        if isinstance(result, list):
+            return result
+
+        if isinstance(result, dict) and not self._is_error_response(result):
+            if isinstance(result.get("vis"), list):
+                return result.get("vis", [])
+            data_value = result.get("data")
+            if isinstance(data_value, dict) and isinstance(data_value.get("vis"), list):
+                return data_value.get("vis", [])
+        return self._get_network_topology_fallback()
 
 
 class NexfiStatusLogger:
@@ -184,6 +410,7 @@ class NexfiStatusLogger:
         self.running_time = config.get("running_time", DEFAULT_CONFIG["running_time"])
         self.verbose = config.get("verbose", DEFAULT_CONFIG["verbose"])
         self.device_name = config.get("device_name", DEFAULT_CONFIG["device_name"])
+        self.bat_interface = config.get("bat_interface", DEFAULT_CONFIG["bat_interface"])
         
         self.running = True
         
@@ -201,7 +428,13 @@ class NexfiStatusLogger:
             print(f"正在连接到Nexfi设备: {self.nexfi_ip}...")
         
         try:
-            self.client = NexfiClient(self.nexfi_ip, self.username, self.password)
+            self.client = NexfiClient(
+                self.nexfi_ip,
+                self.username,
+                self.password,
+                device_name=self.device_name,
+                bat_interface=self.bat_interface,
+            )
         except Exception as e:
             print(f"连接Nexfi设备失败: {e}")
             print("将使用模拟数据继续运行...")
@@ -239,10 +472,17 @@ class NexfiStatusLogger:
                     'tx_power',            # 发射功率(dBm)
                     'work_mode',           # 工作模式
                     'node_id',             # 节点ID
+                    'node_ip',             # 节点IP
                     'connected_nodes',     # 连接的节点数量
                     'connected_node_id',   # 连接的节点ID
+                    'connected_node_mac',  # 连接的节点MAC
+                    'connected_node_ip',   # 连接的节点IP
                     'rssi',                # 平均信号强度(dBm)
                     'snr',                 # 信噪比
+                    'topology_snr',        # 拓扑中的信噪比
+                    'link_metric',         # 拓扑metric
+                    'tx_rate',             # 拓扑速率
+                    'last_seen',           # 最后可达
                     'throughput',          # 吞吐量(Mbps)
                     'cpu_usage',           # CPU使用率
                     'memory_usage',        # 内存使用率
@@ -283,6 +523,20 @@ class NexfiStatusLogger:
             }
         ]
         
+        mock_nodes = [
+            {
+                'macaddr': 'b8:8e:df:01:e7:d5',
+                'rssi': -65.0,
+                'snr': 25.0,
+                'nodeid': '2',
+                'ipaddr': '192.168.104.9',
+                'link_metric': 185.0,
+                'tx_rate': 24.0,
+                'topology_snr': 30.0,
+                'last_seen': '0'
+            }
+        ]
+
         return {
             'mesh_enabled': True,
             'channel': '149',
@@ -290,7 +544,8 @@ class NexfiStatusLogger:
             'tx_power': '20',
             'work_mode': 'adhoc',
             'node_id': '1',
-            'connected_nodes': 1,
+            'node_ip': '192.168.104.12',
+            'connected_nodes': len(mock_nodes),
             'avg_rssi': -65.0,
             'avg_snr': 25.0,
             'throughput': '50.5',
@@ -300,7 +555,8 @@ class NexfiStatusLogger:
             'firmware_version': 'v1.0.0',
             'topology_nodes': 2,
             'link_quality': 180.0,
-            'typology': mock_topology
+            'typology': mock_topology,
+            'nodeinfo_list': mock_nodes
         }
     
     def process_nexfi_data(self) -> Dict[str, Any]:
@@ -314,65 +570,104 @@ class NexfiStatusLogger:
             mesh_info = self.client.get_mesh_info()
             connected_nodes = self.client.get_connected_nodes(self.device_name)
             topology = self.client.get_network_topology()
+            topology_by_mac: Dict[str, Dict[str, Any]] = {}
+            for topo_node in topology:
+                primary_value = topo_node.get('primary')
+                if not primary_value:
+                    continue
+                topology_by_mac[str(primary_value).lower()] = topo_node
             
             #TODO: connected_nodes中的node字典中没有nodeid字段，需要根据实际情况调整，
             #      nodeid需要从其他地方获取，例如拓扑结构中
             # 处理连接节点的信号质量
-            self_id = mesh_info.get('nodeid', 'N/A')
+            self_id_value = mesh_info.get('nodeid') or mesh_info.get('primary') or mesh_info.get('node_mac') or mesh_info.get('device')
+            self_id = str(self_id_value).lower() if self_id_value else 'n/a'
+            self_entry = topology_by_mac.get(self_id)
+            node_ip = (self_entry or {}).get('ipaddr') or mesh_info.get('ipaddr') or 'N/A'
+            neighbors_data = self_entry.get('neighbors', []) if self_entry else []
             nodeinfo_list = []
+            throughput_samples = []
             for node in connected_nodes:      # 这里只提供了mac地址和snr，rssi的对应关系
                 try:
-                    macaddr = node.get('primary', 'N/A').lower()
-                    rssi = float(node.get('rssi', 0))
-                    snr = float(node.get('snr', 0))
-                    nodeinfo_list.append({'macaddr': macaddr, 'rssi': rssi, 'snr': snr})
+                    primary_value = node.get('primary') or node.get('mac') or 'N/A'
+                    macaddr = str(primary_value).lower()
+                    rssi_raw = node.get('rssi', 0)
+                    snr_raw = node.get('snr', 0)
+                    rssi = float(rssi_raw) if rssi_raw is not None else 0.0
+                    snr = float(snr_raw) if snr_raw is not None else 0.0
+                    raw_assoc = node.get('raw') if isinstance(node.get('raw'), dict) else node
+                    node_entry = {'macaddr': macaddr, 'rssi': rssi, 'snr': snr, 'raw': raw_assoc}
+                    nodeinfo_list.append(node_entry)
+                    raw_info = node_entry.get('raw') if isinstance(node_entry.get('raw'), dict) else {}
+                    thr_value = raw_info.get('thr') if isinstance(raw_info, dict) else None
+                    if isinstance(thr_value, (int, float)):
+                        throughput_samples.append(thr_value / 1000.0)
                 except (ValueError, TypeError):
                     continue
+
+            for node_entry in nodeinfo_list:
+                topo_entry = topology_by_mac.get(node_entry['macaddr'])
+                if topo_entry:
+                    node_entry.setdefault('nodeid', topo_entry.get('nodeid'))
+                    node_entry.setdefault('ipaddr', topo_entry.get('ipaddr'))
+
+            avg_rssi = sum(node['rssi'] for node in nodeinfo_list) / len(nodeinfo_list) if nodeinfo_list else 0.0
+            avg_snr = sum(node['snr'] for node in nodeinfo_list) / len(nodeinfo_list) if nodeinfo_list else 0.0
             
             # 处理拓扑信息，计算平均链路质量
-            link_qualities = []
-            for node in topology:
-                if node.get('nodeid') == self_id:   # 只处理自己的邻居节点
-                    neighbors = node.get('neighbors', [])
-                    for neighbor in neighbors:
-                        try:
-                            neighbor_mac = neighbor.get('neighbor', '').lower()
-                            # 检查neighbor的MAC地址是否在nodeinfo_list中
-                            if any(node_info.get('macaddr') == neighbor_mac for node_info in nodeinfo_list):
-                                # 只处理存在于nodeinfo_list中的邻居节点
-                                for node1 in topology:
-                                    if node1.get('primary', '').lower() == neighbor_mac:
-                                        # 向nodeinfo_list中添加nodeid信息
-                                        neighbor_nodeid = node1.get('nodeid')
-                                        for node_info in nodeinfo_list:
-                                            if node_info.get('macaddr') == neighbor_mac:
-                                                node_info['nodeid'] = neighbor_nodeid
-                                                break
-                                        break
-                        except Exception as e:
-                            if self.verbose:
-                                print(f"处理邻居节点时出错: {e}")
-                            continue
-                        try:
-                            metric = float(neighbor.get('metric', 0))
-                            if metric > 0:
-                                link_qualities.append(metric)
-                        except (ValueError, TypeError):
-                            continue
-                else:
-                    pass  # 只处理本节点的邻居
+            def _to_float(value: Any) -> Optional[float]:
+                try:
+                    if value in (None, ''):
+                        return None
+                    return float(value)
+                except (TypeError, ValueError):
+                    return None
+
+            link_qualities: List[float] = []
+
+            for neighbor in neighbors_data:
+                try:
+                    neighbor_mac = neighbor.get('neighbor', '').lower()
+                    matched_node = next((n for n in nodeinfo_list if n.get('macaddr') == neighbor_mac), None)
+                    if not matched_node:
+                        continue
+
+                    neighbor_node = topology_by_mac.get(neighbor_mac)
+                    if neighbor_node:
+                        matched_node['nodeid'] = neighbor_node.get('nodeid') or matched_node.get('nodeid')
+                        matched_node['ipaddr'] = neighbor_node.get('ipaddr') or matched_node.get('ipaddr')
+
+                    metric = _to_float(neighbor.get('metric'))
+                    if metric is not None and metric > 0:
+                        link_qualities.append(metric)
+                    matched_node['link_metric'] = metric
+                    matched_node['tx_rate'] = _to_float(neighbor.get('tx_rate'))
+                    matched_node['topology_snr'] = _to_float(neighbor.get('snr'))
+                    matched_node['last_seen'] = neighbor.get('last_seen')
+                except Exception as e:
+                    if self.verbose:
+                        print(f"处理邻居节点时出错: {e}")
+                    continue
             
             avg_link_quality = sum(link_qualities) / len(link_qualities) if link_qualities else 0.0
             
+            connected_nodes_count = len(nodeinfo_list) if nodeinfo_list else len(connected_nodes)
+            disabled_value = mesh_info.get('disabled', '1')
+            mesh_enabled = str(disabled_value).lower() in ('0', 'false')
+            throughput_value = system_status.get('throughput', 'N/A')
+            if (throughput_value in ('N/A', None, '')) and throughput_samples:
+                throughput_value = f"{sum(throughput_samples) / len(throughput_samples):.3f}"
+
             return {
-                'mesh_enabled': mesh_info.get('disabled', '1') == '0',
+                'mesh_enabled': mesh_enabled,
                 'channel': mesh_info.get('channel', 'N/A'),
                 'frequency_band': mesh_info.get('chanbw', 'N/A'),
                 'tx_power': mesh_info.get('txpower', 'N/A'),
                 'work_mode': mesh_info.get('mode', 'N/A'),
                 'node_id': mesh_info.get('nodeid', 'N/A'),
-                'connected_nodes': len(connected_nodes),
-                'throughput': system_status.get('throughput', 'N/A'),
+                'node_ip': node_ip,
+                'connected_nodes': connected_nodes_count,
+                'throughput': throughput_value,
                 'cpu_usage': system_status.get('cpu', 'N/A'),
                 'memory_usage': system_status.get('memory', 'N/A'),
                 'uptime': system_status.get('uptime', 'N/A'),
@@ -380,7 +675,9 @@ class NexfiStatusLogger:
                 'topology_nodes': len(topology),
                 'link_quality': avg_link_quality,
                 'nodeinfo_list': nodeinfo_list,
-                'typology': topology
+                'typology': topology,
+                'avg_rssi': avg_rssi,
+                'avg_snr': avg_snr
             }
             
         except Exception as e:
@@ -408,10 +705,17 @@ class NexfiStatusLogger:
                             data['tx_power'],                   # 发射功率
                             data['work_mode'],                  # 工作模式
                             data['node_id'],                    # 本节点ID
+                            data.get('node_ip', 'N/A'),        # 本节点IP
                             data['connected_nodes'],            # 连接节点数
-                            node.get('nodeid', ''),               # 连接的节点ID
+                            node.get('nodeid', ''),            # 连接的节点ID
+                            node.get('macaddr', ''),           # 连接的节点MAC
+                            node.get('ipaddr', ''),            # 连接的节点IP
                             node.get('rssi', ''),               # rssi
                             node.get('snr', ''),                # snr
+                            node.get('topology_snr', ''),       # topo snr
+                            node.get('link_metric', ''),        # metric
+                            node.get('tx_rate', ''),            # tx rate
+                            node.get('last_seen', ''),          # last seen
                             data['throughput'],                 # 吞吐量
                             data['cpu_usage'],                  # CPU使用率
                             data['memory_usage'],               # 内存使用率
@@ -429,7 +733,10 @@ class NexfiStatusLogger:
                         data['tx_power'],
                         data['work_mode'],
                         data['node_id'],
+                        data.get('node_ip', 'N/A'),
                         data['connected_nodes'],
+                        '', '', '',
+                        '', '', '',
                         '', '', '',
                         data['throughput'],
                         data['cpu_usage'],
@@ -529,6 +836,8 @@ def parse_args() -> Dict[str, Any]:
                        help=f'运行时间(秒) (默认: {DEFAULT_CONFIG["running_time"]})')
     parser.add_argument('--device', default=DEFAULT_CONFIG["device_name"],
                        help=f'网络设备名称 (默认: {DEFAULT_CONFIG["device_name"]})')
+    parser.add_argument('--bat-interface', default=DEFAULT_CONFIG["bat_interface"],
+                       help=f'batman-adv接口名称 (默认: {DEFAULT_CONFIG["bat_interface"]})')
     parser.add_argument('--verbose', type=str, default='true',
                        help='是否显示详细信息 (true/false)')
     parser.add_argument('--monitor', type=int, help='监控模式，指定刷新间隔（秒）')
@@ -546,6 +855,7 @@ def parse_args() -> Dict[str, Any]:
         "log_interval": args.interval,
         "running_time": args.time,
         "device_name": args.device,
+        "bat_interface": args.bat_interface,
         "verbose": args.verbose.lower() == 'true',
     }
     
@@ -559,7 +869,13 @@ def main():
         
         if args.monitor:
             # 监控模式 - 使用原有的显示功能
-            client = NexfiClient(config["nexfi_ip"], config["username"], config["password"])
+            client = NexfiClient(
+                config["nexfi_ip"],
+                config["username"],
+                config["password"],
+                device_name=config["device_name"],
+                bat_interface=config["bat_interface"],
+            )
             print(f"开始监控模式，刷新间隔: {args.monitor}秒")
             print("按 Ctrl+C 退出")
             try:
@@ -581,7 +897,13 @@ def main():
         
         elif args.save:
             # 保存模式 - 保存当前状态到JSON
-            client = NexfiClient(config["nexfi_ip"], config["username"], config["password"])
+            client = NexfiClient(
+                config["nexfi_ip"],
+                config["username"],
+                config["password"],
+                device_name=config["device_name"],
+                bat_interface=config["bat_interface"],
+            )
             data = {
                 "timestamp": datetime.now().isoformat(),
                 "system_status": client.get_system_status(),
