@@ -190,9 +190,16 @@ class NexfiClient:
             board_info = {}
 
         load_avg = system_info.get("load", [])
-        cpu_usage = "N/A"
-        if load_avg:
-            cpu_usage = f"{(load_avg[0] / 65535.0) * 100:.1f}%"
+        def _format_load(value):
+            try:
+                return round((float(value) / 65535.0), 3)
+            except (TypeError, ValueError):
+                return None
+
+        load1 = _format_load(load_avg[0]) if len(load_avg) > 0 else None
+        load5 = _format_load(load_avg[1]) if len(load_avg) > 1 else None
+        load15 = _format_load(load_avg[2]) if len(load_avg) > 2 else None
+        cpu_usage = f"{(load1 or 0) * 100:.1f}%" if load1 is not None else "N/A"
 
         memory = system_info.get("memory", {})
         memory_usage = "N/A"
@@ -214,6 +221,12 @@ class NexfiClient:
             "memory": memory_usage,
             "uptime": uptime,
             "firmware": firmware_version,
+            "load1": load1,
+            "load5": load5,
+            "load15": load15,
+            "mem_total": total_mem,
+            "mem_free": free_mem,
+            "mem_cached": memory.get("cached"),
         }
 
     def _get_mesh_info_fallback(self) -> Dict[str, Any]:
@@ -238,6 +251,19 @@ class NexfiClient:
         if isinstance(network_info, dict) and not network_info.get('up', True):
             disabled_flag = '1'
 
+        def _collect_addresses(items, key):
+            if not isinstance(items, list):
+                return []
+            addresses = []
+            for entry in items:
+                addr = entry.get(key)
+                if addr:
+                    addresses.append(addr)
+            return addresses
+
+        ipv4_list = _collect_addresses(network_info.get('ipv4-address'), 'address')
+        ipv6_list = _collect_addresses(network_info.get('ipv6-address'), 'address')
+
         return {
             "mode": wifi_info.get("mode"),
             "channel": wifi_info.get("channel"),
@@ -247,6 +273,13 @@ class NexfiClient:
             "primary": wifi_info.get("bssid"),
             "device": device_used,
             "disabled": disabled_flag,
+            "quality": wifi_info.get("quality"),
+            "quality_max": wifi_info.get("quality_max"),
+            "noise": wifi_info.get("noise"),
+            "bitrate": wifi_info.get("bitrate"),
+            "channel_width": wifi_info.get("htmode"),
+            "bat_ipv4": ','.join(ipv4_list) if ipv4_list else None,
+            "bat_ipv6": ','.join(ipv6_list) if ipv6_list else None,
         }
 
     def _format_assoc_entry(self, entry: Dict[str, Any], device: str) -> Dict[str, Any]:
@@ -422,6 +455,9 @@ class NexfiStatusLogger:
         # 生成日志文件名（与UDP测试系统保持一致的命名格式）
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.log_file = os.path.join(self.log_path, f"nexfi_status_{timestamp}.csv")
+        self.topology_edges_file = os.path.join(self.typology_path, f"typology_edges_{timestamp}.csv")
+        self.topology_edges_initialized = False
+        self.topology_edges_disabled = False
         
         # 创建Nexfi客户端
         if self.verbose:
@@ -442,6 +478,7 @@ class NexfiStatusLogger:
         
         # 初始化CSV文件
         self.init_csv_file()
+        self.init_topology_edges_file()
         
         # 设置信号处理器
         signal.signal(signal.SIGINT, self.signal_handler)
@@ -473,6 +510,12 @@ class NexfiStatusLogger:
                     'work_mode',           # 工作模式
                     'node_id',             # 节点ID
                     'node_ip',             # 节点IP
+                    'wifi_quality',        # Wi-Fi质量
+                    'wifi_quality_max',    # Wi-Fi质量上限
+                    'wifi_noise',          # 噪声
+                    'wifi_bitrate',        # 速率
+                    'wifi_mode',           # Wi-Fi模式
+                    'channel_width',       # 信道宽度
                     'connected_nodes',     # 连接的节点数量
                     'connected_node_id',   # 连接的节点ID
                     'connected_node_mac',  # 连接的节点MAC
@@ -483,9 +526,30 @@ class NexfiStatusLogger:
                     'link_metric',         # 拓扑metric
                     'tx_rate',             # 拓扑速率
                     'last_seen',           # 最后可达
+                    'thr',                 # 节点吞吐估计
+                    'tx_packets',          # 发送包数
+                    'tx_bytes',            # 发送字节
+                    'tx_retries',          # 重传次数
+                    'rx_packets',          # 接收包数
+                    'rx_bytes',            # 接收字节
+                    'rx_drop_misc',        # 接收丢弃
+                    'mesh_plink',          # Mesh链路状态
+                    'mesh_llid',           # Mesh LLID
+                    'mesh_plid',           # Mesh PLID
+                    'mesh_local_ps',       # 本地省电状态
+                    'mesh_peer_ps',        # 对端省电状态
+                    'mesh_non_peer_ps',    # 非对端省电状态
                     'throughput',          # 吞吐量(Mbps)
                     'cpu_usage',           # CPU使用率
                     'memory_usage',        # 内存使用率
+                    'load1',               # 1分钟负载
+                    'load5',               # 5分钟负载
+                    'load15',              # 15分钟负载
+                    'mem_total',           # 内存总量
+                    'mem_free',            # 内存空闲
+                    'mem_cached',          # 缓存
+                    'bat_ipv4',            # bat接口IPv4
+                    'bat_ipv6',            # bat接口IPv6
                     'uptime',              # 运行时间
                     'firmware_version',    # 固件版本
                     'topology_nodes',      # 拓扑中的节点数
@@ -496,6 +560,32 @@ class NexfiStatusLogger:
         except Exception as e:
             print(f"创建CSV文件时出错: {e}")
             sys.exit(1)
+
+    def init_topology_edges_file(self):
+        """初始化拓扑边CSV文件"""
+        if self.topology_edges_disabled:
+            return
+        try:
+            with open(self.topology_edges_file, 'w', newline='') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow([
+                    'timestamp',
+                    'router_mac',
+                    'router_ip',
+                    'router_nodeid',
+                    'neighbor_mac',
+                    'neighbor_ip',
+                    'neighbor_nodeid',
+                    'metric',
+                    'tx_rate',
+                    'snr',
+                    'last_seen'
+                ])
+            self.topology_edges_initialized = True
+        except Exception as e:
+            print(f"创建拓扑边CSV文件时出错: {e}")
+            self.topology_edges_initialized = False
+            self.topology_edges_disabled = True
     
     def get_mock_data(self) -> Dict[str, Any]:
         """获取模拟数据（当无法连接到Nexfi设备时使用）"""
@@ -596,12 +686,34 @@ class NexfiStatusLogger:
                     rssi = float(rssi_raw) if rssi_raw is not None else 0.0
                     snr = float(snr_raw) if snr_raw is not None else 0.0
                     raw_assoc = node.get('raw') if isinstance(node.get('raw'), dict) else node
-                    node_entry = {'macaddr': macaddr, 'rssi': rssi, 'snr': snr, 'raw': raw_assoc}
+                    node_entry = {
+                        'macaddr': macaddr,
+                        'rssi': rssi,
+                        'snr': snr,
+                        'raw': raw_assoc,
+                        'thr': raw_assoc.get('thr'),
+                        'mesh_plink': raw_assoc.get('mesh plink'),
+                        'mesh_llid': raw_assoc.get('mesh llid'),
+                        'mesh_plid': raw_assoc.get('mesh plid'),
+                        'mesh_local_ps': raw_assoc.get('mesh local PS'),
+                        'mesh_peer_ps': raw_assoc.get('mesh peer PS'),
+                        'mesh_non_peer_ps': raw_assoc.get('mesh non-peer PS'),
+                    }
                     nodeinfo_list.append(node_entry)
                     raw_info = node_entry.get('raw') if isinstance(node_entry.get('raw'), dict) else {}
                     thr_value = raw_info.get('thr') if isinstance(raw_info, dict) else None
                     if isinstance(thr_value, (int, float)):
                         throughput_samples.append(thr_value / 1000.0)
+
+                    tx_info = raw_info.get('tx') if isinstance(raw_info.get('tx'), dict) else {}
+                    rx_info = raw_info.get('rx') if isinstance(raw_info.get('rx'), dict) else {}
+                    node_entry['tx_packets'] = tx_info.get('packets')
+                    node_entry['tx_bytes'] = tx_info.get('bytes')
+                    node_entry['tx_retries'] = tx_info.get('retries')
+                    node_entry['tx_rate_curr'] = tx_info.get('rate')
+                    node_entry['rx_packets'] = rx_info.get('packets')
+                    node_entry['rx_bytes'] = rx_info.get('bytes')
+                    node_entry['rx_drop_misc'] = rx_info.get('drop_misc')
                 except (ValueError, TypeError):
                     continue
 
@@ -666,10 +778,24 @@ class NexfiStatusLogger:
                 'work_mode': mesh_info.get('mode', 'N/A'),
                 'node_id': mesh_info.get('nodeid', 'N/A'),
                 'node_ip': node_ip,
+                'wifi_quality': mesh_info.get('quality'),
+                'wifi_quality_max': mesh_info.get('quality_max'),
+                'wifi_noise': mesh_info.get('noise'),
+                'wifi_bitrate': mesh_info.get('bitrate'),
+                'wifi_mode': mesh_info.get('mode'),
+                'channel_width': mesh_info.get('channel_width'),
                 'connected_nodes': connected_nodes_count,
                 'throughput': throughput_value,
                 'cpu_usage': system_status.get('cpu', 'N/A'),
                 'memory_usage': system_status.get('memory', 'N/A'),
+                'load1': system_status.get('load1'),
+                'load5': system_status.get('load5'),
+                'load15': system_status.get('load15'),
+                'mem_total': system_status.get('mem_total'),
+                'mem_free': system_status.get('mem_free'),
+                'mem_cached': system_status.get('mem_cached'),
+                'bat_ipv4': mesh_info.get('bat_ipv4'),
+                'bat_ipv6': mesh_info.get('bat_ipv6'),
                 'uptime': system_status.get('uptime', 'N/A'),
                 'firmware_version': system_status.get('firmware', 'N/A'),
                 'topology_nodes': len(topology),
@@ -706,6 +832,12 @@ class NexfiStatusLogger:
                             data['work_mode'],                  # 工作模式
                             data['node_id'],                    # 本节点ID
                             data.get('node_ip', 'N/A'),        # 本节点IP
+                            data.get('wifi_quality', ''),
+                            data.get('wifi_quality_max', ''),
+                            data.get('wifi_noise', ''),
+                            data.get('wifi_bitrate', ''),
+                            data.get('wifi_mode', ''),
+                            data.get('channel_width', ''),
                             data['connected_nodes'],            # 连接节点数
                             node.get('nodeid', ''),            # 连接的节点ID
                             node.get('macaddr', ''),           # 连接的节点MAC
@@ -716,9 +848,30 @@ class NexfiStatusLogger:
                             node.get('link_metric', ''),        # metric
                             node.get('tx_rate', ''),            # tx rate
                             node.get('last_seen', ''),          # last seen
+                            node.get('thr', ''),                # thr
+                            node.get('tx_packets', ''),
+                            node.get('tx_bytes', ''),
+                            node.get('tx_retries', ''),
+                            node.get('rx_packets', ''),
+                            node.get('rx_bytes', ''),
+                            node.get('rx_drop_misc', ''),
+                            node.get('mesh_plink', ''),
+                            node.get('mesh_llid', ''),
+                            node.get('mesh_plid', ''),
+                            node.get('mesh_local_ps', ''),
+                            node.get('mesh_peer_ps', ''),
+                            node.get('mesh_non_peer_ps', ''),
                             data['throughput'],                 # 吞吐量
                             data['cpu_usage'],                  # CPU使用率
                             data['memory_usage'],               # 内存使用率
+                            data.get('load1', ''),
+                            data.get('load5', ''),
+                            data.get('load15', ''),
+                            data.get('mem_total', ''),
+                            data.get('mem_free', ''),
+                            data.get('mem_cached', ''),
+                            data.get('bat_ipv4', ''),
+                            data.get('bat_ipv6', ''),
                             data['uptime'],                     # 运行时间
                             data['firmware_version'],           # 固件版本
                             data['topology_nodes'],             # 拓扑节点数
@@ -734,13 +887,30 @@ class NexfiStatusLogger:
                         data['work_mode'],
                         data['node_id'],
                         data.get('node_ip', 'N/A'),
+                        data.get('wifi_quality', ''),
+                        data.get('wifi_quality_max', ''),
+                        data.get('wifi_noise', ''),
+                        data.get('wifi_bitrate', ''),
+                        data.get('wifi_mode', ''),
+                        data.get('channel_width', ''),
                         data['connected_nodes'],
+                        '', '', '',
+                        '', '', '',
+                        '', '', '',
                         '', '', '',
                         '', '', '',
                         '', '', '',
                         data['throughput'],
                         data['cpu_usage'],
                         data['memory_usage'],
+                        data.get('load1', ''),
+                        data.get('load5', ''),
+                        data.get('load15', ''),
+                        data.get('mem_total', ''),
+                        data.get('mem_free', ''),
+                        data.get('mem_cached', ''),
+                        data.get('bat_ipv4', ''),
+                        data.get('bat_ipv6', ''),
                         data['uptime'],
                         data['firmware_version'],
                         data['topology_nodes'],
@@ -750,31 +920,10 @@ class NexfiStatusLogger:
             print(f"记录Nexfi状态数据时出错: {e}")
         
         # 写拓扑数据到json文件
-        if 'typology' in data and data['typology']:
-            # 将timestamp转换为易读的年月日-时分秒格式
-            readable_time = datetime.fromtimestamp(timestamp).strftime("%Y%m%d-%H%M%S")
-            typology_filename = f"typology_{readable_time}.json"
-            typology_filepath = os.path.join(self.typology_path, typology_filename)
-            
-            try:
-                typology_data = {
-                    "timestamp": timestamp,
-                    "datetime": datetime.fromtimestamp(timestamp).isoformat(),
-                    "readable_time": readable_time,
-                    "node_id": data['node_id'],
-                    "typology": data['typology']
-                }
-                
-                with open(typology_filepath, 'w', encoding='utf-8') as f:
-                    json.dump(typology_data, f, ensure_ascii=False, indent=2)
-                
-                if self.verbose:
-                    print(f"拓扑数据已保存到: {typology_filepath}")
-                    
-            except Exception as e:
-                if self.verbose:
-                    print(f"保存拓扑数据时出错: {e}")
-        
+        topology_snapshot = data.get('typology')
+        if topology_snapshot:
+            self.log_topology_edges(timestamp, topology_snapshot)
+
         # 从data中移除typology，避免在CSV中显示
         data.pop('typology', None) 
         
@@ -785,7 +934,53 @@ class NexfiStatusLogger:
                   f"RSSI: {data['avg_rssi']:.1f}dBm, "
                   f"SNR: {data['avg_snr']:.1f}dB, "
                   f"Throughput: {data['throughput']}")
-                
+
+    def log_topology_edges(self, timestamp: float, topology: List[Dict[str, Any]]):
+        """把完整拓扑边写入CSV"""
+        if not topology or self.topology_edges_disabled:
+            return
+        if not self.topology_edges_initialized:
+            self.init_topology_edges_file()
+            if not self.topology_edges_initialized:
+                return
+
+        nodes_by_mac = {}
+        for node in topology:
+            primary = str(node.get('primary', '')).lower()
+            if not primary:
+                continue
+            nodes_by_mac[primary] = node
+
+        try:
+            with open(self.topology_edges_file, 'a', newline='') as csvfile:
+                writer = csv.writer(csvfile)
+                for node in topology:
+                    router_mac = str(node.get('primary', '')).lower()
+                    router_ip = node.get('ipaddr', '')
+                    router_nodeid = node.get('nodeid', '')
+                    neighbors = node.get('neighbors', [])
+                    if not isinstance(neighbors, list):
+                        continue
+                    for neighbor in neighbors:
+                        neighbor_mac = str(neighbor.get('neighbor', '')).lower()
+                        neighbor_entry = nodes_by_mac.get(neighbor_mac, {})
+                        writer.writerow([
+                            timestamp,
+                            router_mac,
+                            router_ip,
+                            router_nodeid,
+                            neighbor_mac,
+                            neighbor_entry.get('ipaddr', ''),
+                            neighbor_entry.get('nodeid', ''),
+                            neighbor.get('metric', ''),
+                            neighbor.get('tx_rate', ''),
+                            neighbor.get('snr', ''),
+                            neighbor.get('last_seen', ''),
+                        ])
+        except Exception as e:
+            if self.verbose:
+                print(f"写入拓扑边数据失败: {e}")
+
         
     def run(self):
         """运行Nexfi状态数据记录"""

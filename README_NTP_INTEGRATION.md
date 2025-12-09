@@ -442,7 +442,8 @@ source venv/bin/activate
 - `gps_logger_[drone_id]_YYYYMMDD_HHMMSS.csv`: GPS位置和状态日志
 
 ### Nexfi通信状态日志
-- `nexfi_status_YYYYMMDD_HHMMSS.csv`: Nexfi通信模块状态和链路质量日志
+- `nexfi_status_YYYYMMDD_HHMMSS.csv`: Nexfi通信模块状态和链路质量日志（逐链路行，包含Wi‑Fi物理层、链路统计、系统负载等扩展字段）
+- `logs/typology/typology_edges_YYYYMMDD_HHMMSS.csv` 🆕: 每次轮询生成的拓扑边CSV，记录整张Mesh图中任意路由器与邻居的metric/tx_rate/SNR/last_seen，可直接做全网分析
 
 ### 日志格式示例
 
@@ -467,12 +468,13 @@ timestamp,latitude,longitude,altitude,local_x,local_y,local_z,connected,armed,of
 1640995201.123456,39.123457,116.123457,100.6,10.3,5.4,2.2,true,true,false
 ```
 
-**Nexfi通信状态日志 (CSV)**:
+**Nexfi通信状态日志 (CSV)** (节选):
 ```csv
-timestamp,mesh_enabled,channel,frequency_band,tx_power,work_mode,node_id,connected_nodes,avg_rssi,avg_snr,throughput,cpu_usage,memory_usage,uptime,firmware_version,topology_nodes,link_quality
-1640995200.123456,True,149,20,20,adhoc,1,2,-65.5,25.3,45.2,15%,42%,2h 30m,v1.0.0,3,180.5
-1640995201.123456,True,149,20,20,adhoc,1,2,-66.1,24.8,44.8,16%,43%,2h 30m,v1.0.0,3,179.2
+timestamp,mesh_enabled,channel,node_id,node_ip,wifi_quality,wifi_noise,connected_node_ip,rssi,snr,topology_snr,link_metric,tx_rate,thr,tx_packets,tx_retries,rx_packets,rx_drop_misc,mesh_plink,throughput,cpu_usage,load1,mem_total,bat_ipv4
+1765254430.25,True,6,B8:8E:DF:01:E7:D5,192.168.104.9,66,-102,192.168.104.12,-57,45,49,243,17,32906,48228,27207,198233,271,ESTAB,30.843,36.0%,0.36,59281408,192.168.104.9
+1765254430.25,True,6,B8:8E:DF:01:E7:D5,192.168.104.9,66,-102,192.168.104.1,-40,62,64,255,20,28781,107101,59854,242890,642,ESTAB,30.843,36.0%,0.36,59281408,192.168.104.9
 ```
+> 每一行代表“本机 ↔ 某个邻居”链路；其余字段（频宽、channel_width、tx/rx字节、CPU/内存等）也在同一行同步记录。
 
 **系统监控日志 (JSON Lines)** 🆕:
 ```json
@@ -497,20 +499,76 @@ timestamp,mesh_enabled,channel,frequency_band,tx_power,work_mode,node_id,connect
 
 ## GPS记录功能详解
 
-### GPS数据字段说明
+> **2025-12 更新**：`gps.py` 现在会自动订阅 Aerostack2/PSDK 的姿态、速度、GNSS、RTK、控制、电源、避障等 40+ 个话题，一并写入 `gps_logger_*.csv`。无需改系统包，只要按照下方环境要求运行即可获得完整的无人机状态快照。
+
+### GPS数据字段说明（按类别划分）
+
+**核心位姿与状态**
 
 | 字段名 | 类型 | 说明 |
 |--------|------|------|
 | timestamp | float | Unix时间戳 |
-| latitude | float | 纬度 (度) |
-| longitude | float | 经度 (度) |
-| altitude | float | 海拔高度 (米) |
-| local_x | float | 本地坐标X (米) |
-| local_y | float | 本地坐标Y (米) |
-| local_z | float | 本地坐标Z (米) |
-| connected | bool | 无人机连接状态 |
-| armed | bool | 无人机解锁状态 |
-| offboard | bool | Offboard模式状态 |
+| latitude / longitude / altitude | float | GNSS原始坐标 (deg/m) |
+| local_x / local_y / local_z | float | Aerostack本地坐标 (m) |
+| connected / armed / offboard | bool | 平台连接、解锁、Offboard 状态 |
+| linear_vx / vy / vz | float | `DroneInterface` 线速度 (m/s) |
+| angular_vx / vy / vz | float | `psdk_ros2/angular_rate_ground_fused` 角速度 (rad/s) |
+| roll / pitch / yaw | float | 欧拉角 (rad) |
+| psdk_vel_x / y / z | float | PSDK Ground Fused 速度 (m/s) |
+| psdk_acc_ground_x / y / z | float | 地理系线加速度 (m/s²) |
+| psdk_acc_body_raw_* / psdk_acc_body_fused_* | float | 机体系原始/融合加速度 |
+| psdk_ang_rate_body_* | float | 机体系角速度 |
+| psdk_att_qx / qy / qz / qw | float | PSDK 姿态四元数 |
+| height_above_ground | float | 距地高度 (m) |
+| altitude_barometric / altitude_sea_level | float | 气压/海平面高度 (m) |
+| position_fused_* | float | PSDK ENU 位置 |
+| position_fused_health_* | uint8 | 各轴健康度 |
+| mag_field_x / y / z | float | 磁场 (µT) |
+
+**GNSS / RTK 字段**
+
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| gps_nav_lat / lon / alt | float | `psdk_ros2/gps_position` 经纬高 |
+| gps_nav_vel_x / y / z | float | `psdk_ros2/gps_velocity` 速度 |
+| gps_fix_state | float | `GPSDetails.fix_state` (0~5) |
+| gps_horizontal_dop / position_dop | float | DOP 指标 |
+| gps_vertical_accuracy / horizontal_accuracy | float | 精度 (mm) |
+| gps_speed_accuracy | float | 速度精度 (cm/s) |
+| gps_satellites_gps / glonass / total | uint | 使用的卫星数量 |
+| gps_counter | uint | PSDK GPS数据计数 |
+| gps_signal_level | uint8 | 信号等级 (0~5) |
+| home_point_lat / lon / alt | float | 返航点坐标 |
+| home_point_status | bool | 返航点是否锁定 |
+| home_point_altitude | float | 返航点高度 (m) |
+| rtk_lat / lon / alt | float | RTK 坐标 |
+| rtk_vel_x / y / z | float | RTK 速度 |
+| rtk_connection_status | uint16 | RTK 链路状态 |
+| rtk_yaw | uint16 | RTK Yaw (deg) |
+
+**控制与姿态状态**
+
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| platform_state / yaw_mode / control_mode / reference_frame | int | `platform/info` 中的状态机与控制模式 |
+| display_mode | uint8 | PSDK 显示模式 (DJI Flight Mode) |
+| psdk_control_mode / device_mode / control_auth | uint8 | `psdk_ros2/control_mode` |
+| flight_status | uint8 | 起降状态 (0停、1地面、2空中) |
+| flight_anomaly_flags | str | 将 `psdk_ros2/flight_anomaly` 中为 1 的字段用 `|` 拼接（无异常时为 `none`） |
+| rc_axis_0~3 | float | 摇杆 XYZ/Yaw 输入 |
+| rc_button_0~1 | int | 常用按键值 |
+| rc_air_connection / ground_connection / app_connection / rc_link_disconnected | uint8 | 遥控链路状态 |
+
+**电源 / ESC / 避障 / HMS**
+
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| battery1_* / battery2_* | float | 两块电池的电压、电流、剩余容量、百分比、温度 |
+| esc_avg_current / voltage / temperature | float | 所有电调平均电参 |
+| esc_max_temperature | float | 电调最高温 (℃) |
+| relative_obstacle_up / down / front / back / left / right | float | 各方向避障距离 (m) |
+| relative_obstacle_*_health | uint8 | 避障传感器健康度 |
+| hms_error_summary | str | `psdk_ros2/hms_info_table` 中存在错误码的 `error_code:error_level` 列表 |
 
 ### GPS记录器独立使用
 
@@ -529,6 +587,20 @@ python3 gps.py --drone-id=drone0 --sim-time --log-path=./sim_logs
 # 查看帮助
 python3 gps.py --help
 ```
+
+> **运行建议**
+> 1. 当前测试环境（drone9）使用 `ROS_DOMAIN_ID=9`，且 Aerostack2/PSDK 进程默认采用 **Cyclone DDS**。运行 GPS 记录器前，请使用 root 执行：
+>    ```bash
+>    sudo -s
+>    export ROS_DOMAIN_ID=9
+>    export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+>    source /opt/ros/humble/setup.bash
+>    source /home/amov/aerostack2_ws/install/setup.bash
+>    cd /home/amov/udp_test/udp-latency
+>    python3 gps.py --drone-id=drone9 --log-path ./logs --time 600 --interval 0.5
+>    ```
+> 2. 若在其他无人机命名空间运行，请将 `ROS_DOMAIN_ID`、`--drone-id` 替换为相应值，并确认目标 Aerostack2 进程使用的 DDS 实现；必要时移除 `RMW_IMPLEMENTATION` 或与实际值保持一致。
+> 3. 脚本会先写入若干 `nan`（等待 ROS 话题出现），属于正常现象，可在后处理中过滤。
 
 ### ROS2环境配置
 
@@ -560,17 +632,41 @@ ros2 topic list | grep gps
 | frequency_band | str | 频宽 (MHz) |
 | tx_power | str | 发射功率 (dBm) |
 | work_mode | str | 工作模式 (adhoc/ap/client) |
-| node_id | str | 节点ID |
+| node_id | str | 节点ID（本机MAC） |
+| node_ip | str | 节点管理IP |
+| wifi_quality / wifi_quality_max | int | `iwinfo` 返回的信号质量及上限 |
+| wifi_noise | int | 噪声电平 (dBm) |
+| wifi_bitrate | float | 当前物理速率 (kbps) |
+| wifi_mode | str | Mesh/AP/Client 模式 |
+| channel_width | str | HT20/HT40/VHT 等通道宽度 |
 | connected_nodes | int | 连接的节点数量 |
-| avg_rssi | float | 平均信号强度 (dBm) |
-| avg_snr | float | 平均信噪比 (dB) |
-| throughput | str | 吞吐量 (Mbps) |
+| connected_node_id | str | 邻居节点ID（来自拓扑） |
+| connected_node_mac | str | 邻居MAC |
+| connected_node_ip | str | 邻居IP（若可解析） |
+| rssi / snr | float | 来自主机视角的瞬时RSSI和SNR |
+| topology_snr | float | `batadv-vis` 提供的SNR |
+| link_metric | float | Batman TQ metric (0-255) |
+| tx_rate | float | 拓扑中的速率估计 (Mbps) |
+| last_seen | str | 邻居最后可达时间 (秒) |
+| thr | float | `iwinfo` 估算的链路吞吐量 (kbps) |
+| tx_packets / tx_bytes | int | Wi‑Fi接口向该邻居发送的包/字节数 |
+| tx_retries | int | Wi‑Fi重传次数 |
+| rx_packets / rx_bytes | int | Wi‑Fi接口从该邻居接收的包/字节数 |
+| rx_drop_misc | int | 接收丢包计数 |
+| mesh_plink | str | Mesh链路状态 (ESTAB/DISABLED/...) |
+| mesh_llid / mesh_plid | int | Mesh链路标识 |
+| mesh_local_ps / mesh_peer_ps / mesh_non_peer_ps | str | Mesh省电状态 |
+| throughput | str | 平均吞吐量 (Mbps)，取系统统计或thr均值 |
 | cpu_usage | str | CPU使用率 |
 | memory_usage | str | 内存使用率 |
+| load1 / load5 / load15 | float | 系统1/5/15分钟平均负载 |
+| mem_total / mem_free / mem_cached | int | 内存统计 (字节) |
+| bat_ipv4 / bat_ipv6 | str | batman-adv 接口IP列表（逗号分隔） |
 | uptime | str | 系统运行时间 |
 | firmware_version | str | 固件版本 |
 | topology_nodes | int | 拓扑中的节点总数 |
-| link_quality | float | 平均链路质量 (0-255) |
+| link_quality | float | 本节点邻居平均链路质量 |
+| avg_rssi / avg_snr | float | 所有邻居的平均RSSI/SNR（便于快速浏览） |
 
 ### Nexfi记录器独立使用
 
@@ -583,6 +679,9 @@ python3 nexfi_client.py --nexfi-ip=192.168.104.1 --interval=1.0 --time=300
 # 自定义参数
 python3 nexfi_client.py --nexfi-ip=192.168.104.1 --username=admin --password=mypass --device=wlan0
 
+# 指定batman-adv接口 (默认bat0)
+python3 nexfi_client.py --nexfi-ip=192.168.104.1 --device=mesh0 --bat-interface=bat0
+
 # 监控模式 - 实时显示状态
 python3 nexfi_client.py --nexfi-ip=192.168.104.1 --monitor=5
 
@@ -592,6 +691,22 @@ python3 nexfi_client.py --nexfi-ip=192.168.104.1 --save --output=nexfi_snapshot.
 # 查看帮助
 python3 nexfi_client.py --help
 ```
+
+### 拓扑边CSV字段说明 🆕
+
+`logs/typology/typology_edges_*.csv` 会为每次轮询追加整张Mesh中的所有边，字段定义如下：
+
+| 字段名 | 说明 |
+|--------|------|
+| timestamp | Unix时间戳（与 `nexfi_status` 同步） |
+| router_mac / router_ip / router_nodeid | 边的起点节点信息 |
+| neighbor_mac / neighbor_ip / neighbor_nodeid | 边的终点节点信息 |
+| metric | Batman TQ (0-255) |
+| tx_rate | 邻居速率估计 (Mbps) |
+| snr | 邻居信噪比 |
+| last_seen | 邻居最后可达 (秒) |
+
+> 提示：配合主CSV里的 `connected_node_ip` 可以只筛选无人机链路；如需历史拓扑，可对该CSV按时间聚合即可，无需大量JSON文件。
 
 ### Nexfi设备连接测试
 
