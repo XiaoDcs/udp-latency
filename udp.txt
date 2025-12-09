@@ -10,10 +10,6 @@ cd /home/amov/aerostack2_ws/src/project_dji_psdk
 ./launch_as2.bash -n drone9
 ./launch_as2.bash -n drone12
 
-./start_test.sh receiver --local-ip=192.168.104.109 --peer-ip=192.168.104.112 --enable-nexfi --nexfi-ip=192.168.104.9 --time=1000 --enable-gps --drone-id=drone9 --gps-interval=0.1 --nexfi-interval=0.1
-
-./start_test.sh sender --local-ip=192.168.104.112 --peer-ip=192.168.104.109 --enable-nexfi --nexfi-ip=192.168.104.12 --time=1000 --enable-gps --drone-id=drone12 --gps-interval=0.1 --nexfi-interval=0.1
-
 # 无人机A（机载电脑 192.168.104.109，通信模块 192.168.104.9）作为 receiver
 ./start_test.sh receiver \
   --local-ip=192.168.104.109 \
@@ -37,9 +33,9 @@ cd /home/amov/aerostack2_ws/src/project_dji_psdk
   --static-route-via=192.168.104.9
 
 
-109机器：sudo ip route del 192.168.104.112/32 via 192.168.104.12 dev bat0
+109机器：sudo ip route del 192.168.104.112/32 via 192.168.104.12
 
-112机器：sudo ip route del 192.168.104.109/32 via 192.168.104.9 dev bat0
+112机器：sudo ip route del 192.168.104.109/32 via 192.168.104.9
 
 对时权限清理
 ls -l /tmp/chrony.conf.new

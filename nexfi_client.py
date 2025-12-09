@@ -5,6 +5,7 @@ Nexfi通信模块状态记录器
 支持CSV格式日志记录，与GPS和UDP测试系统保持一致
 """
 
+import argparse
 import requests
 import uuid
 import json
@@ -14,7 +15,7 @@ import signal
 import sys
 import os
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 import logging
 
 # 配置日志
@@ -319,21 +320,26 @@ class NexfiClient:
             return stdout_parsed.get("vis", [])
         return []
 
-    def _make_request(self, service: str, method: str, params: Dict = None, max_retries: int = 3) -> Dict:
+    def _make_request(
+        self,
+        service: str,
+        method: str,
+        params: Optional[Dict[str, Any]] = None,
+        max_retries: int = 3,
+    ) -> Dict[str, Any]:
         """
         发送API请求的通用方法
         
         Args:
             service (str): 服务名称
             method (str): 方法名称
-            params (Dict): 参数字典
+            params (Optional[Dict[str, Any]]): 参数字典
             max_retries (int): 最大重试次数
             
         Returns:
-            Dict: API响应结果
+            Dict[str, Any]: API响应结果
         """
-        if params is None:
-            params = {}
+        params_dict: Dict[str, Any] = params if params is not None else {}
             
         for i in range(max_retries):
             request_id = str(uuid.uuid4())
@@ -341,7 +347,7 @@ class NexfiClient:
                 "jsonrpc": "2.0",
                 "id": request_id,
                 "method": "call",
-                "params": [self.session, service, method, params],
+                "params": [self.session, service, method, params_dict],
             }
             
             try:
@@ -678,6 +684,8 @@ class NexfiStatusLogger:
             nodeinfo_list = []
             throughput_samples = []
             for node in connected_nodes:      # 这里只提供了mac地址和snr，rssi的对应关系
+                if not isinstance(node, dict):
+                    continue
                 try:
                     primary_value = node.get('primary') or node.get('mac') or 'N/A'
                     macaddr = str(primary_value).lower()
@@ -685,7 +693,12 @@ class NexfiStatusLogger:
                     snr_raw = node.get('snr', 0)
                     rssi = float(rssi_raw) if rssi_raw is not None else 0.0
                     snr = float(snr_raw) if snr_raw is not None else 0.0
-                    raw_assoc = node.get('raw') if isinstance(node.get('raw'), dict) else node
+                    raw_source = node.get('raw')
+                    raw_assoc: Dict[str, Any]
+                    if isinstance(raw_source, dict):
+                        raw_assoc = raw_source
+                    else:
+                        raw_assoc = node
                     node_entry = {
                         'macaddr': macaddr,
                         'rssi': rssi,
@@ -700,13 +713,16 @@ class NexfiStatusLogger:
                         'mesh_non_peer_ps': raw_assoc.get('mesh non-peer PS'),
                     }
                     nodeinfo_list.append(node_entry)
-                    raw_info = node_entry.get('raw') if isinstance(node_entry.get('raw'), dict) else {}
-                    thr_value = raw_info.get('thr') if isinstance(raw_info, dict) else None
+                    raw_info_candidate = node_entry.get('raw')
+                    raw_info: Dict[str, Any] = raw_info_candidate if isinstance(raw_info_candidate, dict) else {}
+                    thr_value = raw_info.get('thr')
                     if isinstance(thr_value, (int, float)):
                         throughput_samples.append(thr_value / 1000.0)
 
-                    tx_info = raw_info.get('tx') if isinstance(raw_info.get('tx'), dict) else {}
-                    rx_info = raw_info.get('rx') if isinstance(raw_info.get('rx'), dict) else {}
+                    tx_candidate = raw_info.get('tx')
+                    tx_info: Dict[str, Any] = tx_candidate if isinstance(tx_candidate, dict) else {}
+                    rx_candidate = raw_info.get('rx')
+                    rx_info: Dict[str, Any] = rx_candidate if isinstance(rx_candidate, dict) else {}
                     node_entry['tx_packets'] = tx_info.get('packets')
                     node_entry['tx_bytes'] = tx_info.get('bytes')
                     node_entry['tx_retries'] = tx_info.get('retries')
@@ -916,24 +932,25 @@ class NexfiStatusLogger:
                         data['topology_nodes'],
                         data['link_quality']
                     ])
+            # 写拓扑数据到json文件
+            topology_snapshot = data.get('typology')
+            if topology_snapshot:
+                self.log_topology_edges(timestamp, topology_snapshot)
+    
+            # 从data中移除typology，避免在CSV中显示
+            data.pop('typology', None)
+    
+            # 显示当前数据（格式与UDP测试系统保持一致）
+            if self.verbose:
+                print(
+                    f"Nexfi logged at {timestamp:.6f}: "
+                    f"Nodes: {data['connected_nodes']}, "
+                    f"RSSI: {data['avg_rssi']:.1f}dBm, "
+                    f"SNR: {data['avg_snr']:.1f}dB, "
+                    f"Throughput: {data['throughput']}"
+                )
         except Exception as e:
             print(f"记录Nexfi状态数据时出错: {e}")
-        
-        # 写拓扑数据到json文件
-        topology_snapshot = data.get('typology')
-        if topology_snapshot:
-            self.log_topology_edges(timestamp, topology_snapshot)
-
-        # 从data中移除typology，避免在CSV中显示
-        data.pop('typology', None) 
-        
-        # 显示当前数据（格式与UDP测试系统保持一致）
-        if self.verbose:
-            print(f"Nexfi logged at {timestamp:.6f}: "
-                  f"Nodes: {data['connected_nodes']}, "
-                  f"RSSI: {data['avg_rssi']:.1f}dBm, "
-                  f"SNR: {data['avg_snr']:.1f}dB, "
-                  f"Throughput: {data['throughput']}")
 
     def log_topology_edges(self, timestamp: float, topology: List[Dict[str, Any]]):
         """把完整拓扑边写入CSV"""
@@ -1012,10 +1029,8 @@ class NexfiStatusLogger:
             print(f"日志文件已保存: {self.log_file}")
 
 
-def parse_args() -> Dict[str, Any]:
+def parse_args() -> Tuple[Dict[str, Any], argparse.Namespace]:
     """解析命令行参数"""
-    import argparse
-    
     parser = argparse.ArgumentParser(description='Nexfi通信状态记录器')
     parser.add_argument('--nexfi-ip', default=DEFAULT_CONFIG["nexfi_ip"], 
                        help=f'Nexfi设备IP地址 (默认: {DEFAULT_CONFIG["nexfi_ip"]})')

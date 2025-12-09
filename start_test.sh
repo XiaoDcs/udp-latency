@@ -303,6 +303,14 @@ cleanup_static_route() {
     fi
 
     local target="${PEER_IP}/32"
+    local existing_route
+    existing_route=$(ip route show "$target" 2>/dev/null | head -n 1)
+    if [[ -z "$existing_route" ]]; then
+        print_info "静态路由已不存在，无需清理"
+        STATIC_ROUTE_CONFIGURED=false
+        return 0
+    fi
+
     local cleanup_cmd=(ip route del "$target")
     if [[ -n "$STATIC_ROUTE_VIA" ]]; then
         cleanup_cmd+=(via "$STATIC_ROUTE_VIA")
@@ -314,6 +322,7 @@ cleanup_static_route() {
     print_info "清理静态路由: ${cleanup_cmd[*]}"
     if sudo "${cleanup_cmd[@]}" 2>/dev/null; then
         print_success "静态路由已清理"
+        STATIC_ROUTE_CONFIGURED=false
     else
         print_warning "静态路由清理失败，可能需要手动执行: sudo ${cleanup_cmd[*]}"
     fi
