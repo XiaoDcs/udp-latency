@@ -32,6 +32,13 @@ NEXFI_INTERVAL=1.0
 NEXFI_DEVICE="adhoc0"
 NEXFI_BAT_INTERFACE="bat0"
 
+# 静态路由配置
+ENABLE_STATIC_ROUTE=false
+STATIC_ROUTE_VIA=""
+STATIC_ROUTE_INTERFACE=""
+STATIC_ROUTE_RULE=""
+STATIC_ROUTE_CONFIGURED=false
+
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -96,6 +103,11 @@ show_help() {
     echo "  --nexfi-interval=SEC     Nexfi记录间隔(秒) (默认: 1.0)"
     echo "  --nexfi-device=DEVICE    Nexfi设备名称 (默认: adhoc0)"
     echo "  --nexfi-bat-interface=IF  Nexfi batman-adv接口 (默认: bat0)"
+    echo ""
+    echo "静态路由选项:"
+    echo "  --enable-static-route    启用静态路由，强制UDP流量走指定Mesh链路"
+    echo "  --static-route-via=IP    指定下一跳IP，通常为对端通信模块IP"
+    echo "  --static-route-interface=DEV  (可选) 指定出接口，如bat0"
     echo ""
     echo "  -h, --help               显示帮助信息"
     echo ""
@@ -228,6 +240,89 @@ check_network() {
     fi
 }
 
+# 配置静态路由，确保UDP测试走指定链路
+configure_static_route() {
+    if [[ "$ENABLE_STATIC_ROUTE" != "true" ]]; then
+        return 0
+    fi
+
+    if [[ -z "$PEER_IP" || -z "$STATIC_ROUTE_VIA" ]]; then
+        print_error "静态路由需要 --peer-ip 与 --static-route-via 均已设置"
+        return 1
+    fi
+
+    local target="${PEER_IP}/32"
+    local interface_part=""
+    if [[ -n "$STATIC_ROUTE_INTERFACE" ]]; then
+        interface_part=" dev $STATIC_ROUTE_INTERFACE"
+    fi
+
+    print_info "检查静态路由: $target via $STATIC_ROUTE_VIA$interface_part"
+    local existing_route
+    existing_route=$(ip route show "$target" 2>/dev/null | head -n 1)
+
+    if [[ -n "$existing_route" && "$existing_route" == *"via $STATIC_ROUTE_VIA"* ]]; then
+        if [[ -z "$STATIC_ROUTE_INTERFACE" || "$existing_route" == *" dev $STATIC_ROUTE_INTERFACE"* ]]; then
+            print_info "静态路由已存在: $existing_route"
+            STATIC_ROUTE_RULE="ip route add $target via $STATIC_ROUTE_VIA$interface_part"
+            STATIC_ROUTE_CONFIGURED=false
+            return 0
+        fi
+    fi
+
+    # 尝试提示网关连通性，方便诊断
+    print_info "验证下一跳 $STATIC_ROUTE_VIA 连通性..."
+    if ping -c 1 -W 2 "$STATIC_ROUTE_VIA" &>/dev/null; then
+        print_success "下一跳 $STATIC_ROUTE_VIA 可达"
+    else
+        print_warning "下一跳 $STATIC_ROUTE_VIA 暂不可达，将继续尝试配置路由"
+    fi
+
+    local route_cmd=(ip route add "$target" via "$STATIC_ROUTE_VIA")
+    if [[ -n "$STATIC_ROUTE_INTERFACE" ]]; then
+        route_cmd+=(dev "$STATIC_ROUTE_INTERFACE")
+    fi
+
+    print_info "执行路由: ${route_cmd[*]}"
+    if sudo "${route_cmd[@]}" 2>/dev/null; then
+        print_success "静态路由配置成功"
+        STATIC_ROUTE_RULE="${route_cmd[*]}"
+        STATIC_ROUTE_CONFIGURED=true
+        return 0
+    else
+        print_error "静态路由配置失败"
+        print_warning "请检查: sudo权限 / 下一跳可达性 / 现有路由冲突"
+        return 1
+    fi
+}
+
+# 清理静态路由，防止测试结束后影响地面站控制
+cleanup_static_route() {
+    if [[ "$ENABLE_STATIC_ROUTE" != "true" || "$STATIC_ROUTE_CONFIGURED" != "true" ]]; then
+        return 0
+    fi
+
+    local target="${PEER_IP}/32"
+    local cleanup_cmd=(ip route del "$target")
+    if [[ -n "$STATIC_ROUTE_VIA" ]]; then
+        cleanup_cmd+=(via "$STATIC_ROUTE_VIA")
+    fi
+    if [[ -n "$STATIC_ROUTE_INTERFACE" ]]; then
+        cleanup_cmd+=(dev "$STATIC_ROUTE_INTERFACE")
+    fi
+
+    print_info "清理静态路由: ${cleanup_cmd[*]}"
+    if sudo "${cleanup_cmd[@]}" 2>/dev/null; then
+        print_success "静态路由已清理"
+    else
+        print_warning "静态路由清理失败，可能需要手动执行: sudo ${cleanup_cmd[*]}"
+    fi
+}
+
+cleanup_on_exit() {
+    cleanup_static_route
+}
+
 # 显示配置信息
 show_config() {
     echo ""
@@ -294,6 +389,21 @@ show_config() {
             NEXFI_TOTAL_TIME=$((UDP_TIME + 120))
         fi
         echo "Nexfi记录时长: $NEXFI_TOTAL_TIME 秒 (自动计算)"
+    fi
+    echo ""
+    echo "静态路由配置:"
+    echo "启用静态路由:  $ENABLE_STATIC_ROUTE"
+    if [[ "$ENABLE_STATIC_ROUTE" == "true" ]]; then
+        local route_desc="目标 ${PEER_IP}/32 via $STATIC_ROUTE_VIA"
+        if [[ -n "$STATIC_ROUTE_INTERFACE" ]]; then
+            route_desc="$route_desc dev $STATIC_ROUTE_INTERFACE"
+        fi
+        echo "路由规则:     $route_desc"
+        if [[ "$STATIC_ROUTE_CONFIGURED" == "true" ]]; then
+            echo "状态:         已由脚本添加"
+        else
+            echo "状态:         使用现有路由或等待配置"
+        fi
     fi
     echo "=========================================="
     echo ""
@@ -487,6 +597,18 @@ parse_args() {
                 NEXFI_BAT_INTERFACE="${1#*=}"
                 shift
                 ;;
+            --enable-static-route)
+                ENABLE_STATIC_ROUTE=true
+                shift
+                ;;
+            --static-route-via=*)
+                STATIC_ROUTE_VIA="${1#*=}"
+                shift
+                ;;
+            --static-route-interface=*)
+                STATIC_ROUTE_INTERFACE="${1#*=}"
+                shift
+                ;;
             -h|--help)
                 show_help
                 exit 0
@@ -502,6 +624,8 @@ parse_args() {
 
 # 主函数
 main() {
+    trap cleanup_on_exit EXIT INT TERM
+
     # 解析参数
     parse_args "$@"
     
@@ -523,7 +647,12 @@ main() {
     
     # 检查网络
     check_network
-    
+
+    # 配置静态路由（如需）
+    if ! configure_static_route; then
+        exit 1
+    fi
+
     # 显示配置
     show_config
     
