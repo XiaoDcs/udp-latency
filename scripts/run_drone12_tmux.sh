@@ -91,6 +91,7 @@ run_aerostack() {
         set +u
         source "$ROS_SETUP"
         source "$AS2_SETUP"
+        export ROS_DOMAIN_ID="$ROS_DOMAIN_ID_VALUE"
         cd "$AEROSTACK_PROJECT"
         ./launch_as2.bash -n "$DRONE_ID"
     )

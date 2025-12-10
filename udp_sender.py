@@ -7,6 +7,7 @@ import sys
 import getopt
 import struct
 import os
+import errno
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
@@ -22,6 +23,31 @@ DEFAULT_CONFIG = {
     "verbose": True,               # 是否打印详细信息
     "log_path": "./logs",          # 日志保存路径
 }
+
+# 根据 errno 将常见的网络/套接字异常拆分，方便在运行时决定是否需要重建 socket
+RETRYABLE_NETWORK_ERRNOS = {
+    errno.EAGAIN,
+    errno.EWOULDBLOCK,
+    errno.EINTR,
+    errno.ENETUNREACH,
+    errno.EHOSTUNREACH,
+    errno.EHOSTDOWN,
+    errno.ENETDOWN,
+    errno.ENETRESET,
+    errno.ECONNRESET,
+    errno.ECONNREFUSED,
+    errno.ENOBUFS,
+}
+
+RECREATE_SOCKET_ERRNOS = {
+    errno.EBADF,
+    errno.ENOTCONN,
+    errno.EPIPE,
+    errno.EINVAL,
+}
+
+MAX_RETRY_SLEEP = 5.0
+MIN_RETRY_SLEEP = 0.05
 
 class UDPSender:
     """
@@ -50,19 +76,19 @@ class UDPSender:
         # 创建发送日志文件
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.log_file = os.path.join(self.log_path, f"udp_sender_{timestamp}.csv")
-        
-        # 初始化日志
-        with open(self.log_file, 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(["seq_num", "timestamp", "packet_size"])
+        self._log_file_handle: Optional[Any] = None
+        self._log_writer: Optional[Any] = None
+        self._logging_enabled = False
+        self._log_write_count = 0
+        self._init_log_writer()
         
         # 初始化序列号
         self.seq_num = 1
         
         # 创建UDP socket
-        self._udp_socket = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
-        self._udp_socket.bind((self.local_ip, self.local_port))
-        
+        self._udp_socket: Optional[socket.socket] = None
+        self._recreate_socket(initial=True)
+
         if self.verbose:
             print(f"UDP Sender initialized: {self.local_ip}:{self.local_port} -> {self.remote_ip}:{self.remote_port}")
             print(f"Packet size: {self.packet_size} bytes, Frequency: {self.frequency} Hz")
@@ -109,15 +135,15 @@ class UDPSender:
                 
                 # 创建并发送数据包
                 packet = self.create_packet()
-                bytes_sent = self._udp_socket.sendto(packet, (self.remote_ip, self.remote_port))
-                
+                bytes_sent = self._send_packet_with_retry(packet, send_interval)
+                if bytes_sent is None:
+                    continue
+
                 # 获取当前时间戳和无人机状态
                 send_time = time.time()
                 
-                # 记录日志
-                with open(self.log_file, 'a', newline='') as f:
-                    writer = csv.writer(f)
-                    writer.writerow([self.seq_num, send_time, bytes_sent])
+                # 记录日志（失败时不影响发送流程）
+                self._append_log_entry(self.seq_num, send_time, bytes_sent)
                 
                 # 打印发送信息
                 if self.verbose:
@@ -139,14 +165,122 @@ class UDPSender:
         except KeyboardInterrupt:
             print("\nTransmission interrupted by user.")
         finally:
-            self._udp_socket.close()
+            if self._udp_socket:
+                self._udp_socket.close()
+            self._close_log_file()
     
     def __del__(self):
         """析构函数，确保socket正确关闭"""
         try:
-            self._udp_socket.close()
+            if self._udp_socket:
+                self._udp_socket.close()
         except:
             pass
+        self._close_log_file()
+
+    def _init_log_writer(self) -> None:
+        """创建日志文件的写入器，失败时禁用日志但不影响发送"""
+        try:
+            self._log_file_handle = open(self.log_file, 'w', newline='')
+            self._log_writer = csv.writer(self._log_file_handle)
+            self._log_writer.writerow(["seq_num", "timestamp", "packet_size"])
+            self._log_file_handle.flush()
+            self._logging_enabled = True
+            self._log_write_count = 0
+        except OSError as exc:
+            self._logging_enabled = False
+            self._close_log_file()
+            if self.verbose:
+                print(f"Unable to initialize log file {self.log_file}: {exc}. Logging disabled.")
+
+    def _append_log_entry(self, seq: int, timestamp: float, packet_size: int) -> None:
+        if not self._logging_enabled or self._log_writer is None:
+            return
+        try:
+            self._log_writer.writerow([seq, timestamp, packet_size])
+            self._log_write_count += 1
+            if self._log_write_count % 10 == 0 and self._log_file_handle:
+                self._log_file_handle.flush()
+        except OSError as exc:
+            self._handle_log_failure(exc)
+
+    def _handle_log_failure(self, exc: OSError) -> None:
+        if self.verbose:
+            print(f"Failed to write UDP log entry: {exc}. Logging disabled.")
+        self._logging_enabled = False
+        self._close_log_file()
+
+    def _close_log_file(self) -> None:
+        if self._log_file_handle is not None:
+            try:
+                self._log_file_handle.close()
+            except OSError:
+                pass
+        self._log_file_handle = None
+        self._log_writer = None
+
+    def _retry_sleep(self, send_interval: float) -> float:
+        """计算一次重试前需要休眠的时间，避免忙等"""
+        return min(MAX_RETRY_SLEEP, max(MIN_RETRY_SLEEP, send_interval))
+
+    def _send_packet_with_retry(self, packet: bytes, send_interval: float) -> Optional[int]:
+        """发送单个数据包，遇到异常时根据类型自动恢复，并通过返回 None 让上层重试"""
+        if self._udp_socket is None:
+            self._recreate_socket()
+            time.sleep(self._retry_sleep(send_interval))
+            return None
+        try:
+            return self._udp_socket.sendto(packet, (self.remote_ip, self.remote_port))
+        except OSError as exc:
+            self._handle_socket_error(exc, send_interval)
+            return None
+        except Exception as exc:
+            if self.verbose:
+                print(f"Unexpected error while sending packet #{self.seq_num}: {exc}. Retrying...")
+            time.sleep(self._retry_sleep(send_interval))
+            return None
+
+    def _handle_socket_error(self, exc: OSError, send_interval: float) -> None:
+        """根据 errno 区分网络波动和真正的套接字异常，决定是否需要重建 socket"""
+        err = exc.errno if isinstance(exc, OSError) else None
+        if self.verbose:
+            print(
+                f"Socket error while sending packet #{self.seq_num}: {exc}"
+                + (f" (errno={err})" if err is not None else "")
+            )
+
+        if err in RETRYABLE_NETWORK_ERRNOS:
+            time.sleep(self._retry_sleep(send_interval))
+            return
+
+        if self.verbose and err in RECREATE_SOCKET_ERRNOS:
+            print("Socket no longer valid, recreating descriptor...")
+
+        # 对于无法恢复的错误，主动重建 socket 并持续尝试
+        self._recreate_socket()
+        time.sleep(self._retry_sleep(send_interval))
+
+    def _recreate_socket(self, initial: bool = False) -> None:
+        """关闭旧的 socket 并尽可能重新创建/绑定，直到成功"""
+        if self._udp_socket is not None:
+            try:
+                self._udp_socket.close()
+            except OSError:
+                pass
+
+        while True:
+            try:
+                sock = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind((self.local_ip, self.local_port))
+                self._udp_socket = sock
+                if self.verbose and not initial:
+                    print(f"Socket recreated: {self.local_ip}:{self.local_port} -> {self.remote_ip}:{self.remote_port}")
+                return
+            except OSError as exc:
+                if self.verbose:
+                    print(f"Failed to create/bind UDP socket: {exc}. Retrying in 1s...")
+                time.sleep(1.0)
 
 
 def parse_args() -> Dict[str, Any]:
@@ -211,4 +345,4 @@ if __name__ == "__main__":
     
     # 创建并启动UDP发送端
     sender = UDPSender(config)
-    sender.send() 
+    sender.send()

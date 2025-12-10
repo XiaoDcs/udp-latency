@@ -7,6 +7,7 @@ import sys
 import getopt
 import struct
 import os
+import errno
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -19,6 +20,34 @@ DEFAULT_CONFIG = {
     "verbose": True,               # 是否打印详细信息
     "log_path": "./logs",          # 日志保存路径
 }
+
+# 常见可恢复的网络异常码，出现时仅重试
+RETRYABLE_NETWORK_ERRNOS = {
+    errno.EAGAIN,
+    errno.EWOULDBLOCK,
+    errno.EINTR,
+    errno.ENETUNREACH,
+    errno.EHOSTUNREACH,
+    errno.EHOSTDOWN,
+    errno.ENETDOWN,
+    errno.ENETRESET,
+    errno.ECONNRESET,
+    errno.ECONNREFUSED,
+    errno.ENOBUFS,
+}
+
+# 套接字已失效时需要重建
+RECREATE_SOCKET_ERRNOS = {
+    errno.EBADF,
+    errno.ENOTCONN,
+    errno.EPIPE,
+    errno.EINVAL,
+}
+
+DEFAULT_SOCKET_TIMEOUT = 1.0
+MAX_RETRY_SLEEP = 5.0
+MIN_RETRY_SLEEP = 0.05
+DEFAULT_RETRY_INTERVAL = 0.5
 
 class UDPReceiver:
     """
@@ -44,23 +73,21 @@ class UDPReceiver:
         # 创建接收日志文件
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.log_file = os.path.join(self.log_path, f"udp_receiver_{timestamp}.csv")
-        
-        # 初始化日志
-        with open(self.log_file, 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(["seq_num", "send_timestamp", "recv_timestamp", "delay", "src_ip", "src_port", "packet_size"])
+        self._log_file_handle: Optional[Any] = None
+        self._log_writer: Optional[Any] = None
+        self._logging_enabled = False
+        self._log_write_count = 0
+        self._init_log_writer()
         
         # 记录最近收到的序列号，用于检测丢包
         self.last_seq_num = 0
         self.packets_received = 0
         self.packets_lost = 0
+        self._retry_base_interval = DEFAULT_RETRY_INTERVAL
         
         # 创建UDP socket
-        self._udp_socket = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
-        self._udp_socket.bind((self.local_ip, self.local_port))
-        
-        # 设置超时，以便定期检查是否应该停止
-        self._udp_socket.settimeout(1.0)
+        self._udp_socket = None
+        self._recreate_socket(initial=True)
         
         if self.verbose:
             print(f"UDP Receiver initialized: {self.local_ip}:{self.local_port}")
@@ -120,49 +147,56 @@ class UDPReceiver:
                 print("Starting UDP packet reception...")
             
             while time.time() < end_time:
+                packet = self._recv_packet_with_retry()
+                if packet is None:
+                    continue
+
+                data, addr, recv_time = packet
+
                 try:
-                    # 接收数据包
-                    data, addr = self._udp_socket.recvfrom(self.buffer_size)
-                    recv_time = time.time()
-                    
                     # 解析数据包
                     seq_num, send_time = self.parse_packet(data)
-                    
+
                     # 跳过无效数据包
                     if seq_num == 0:
                         continue
-                    
+
                     # 计算延迟(秒)
                     delay = recv_time - send_time
-                    
+
                     # 检查丢包
                     lost_packets = self.calculate_packet_loss(seq_num)
                     if lost_packets > 0:
                         self.packets_lost += lost_packets
                         if self.verbose:
                             print(f"Detected {lost_packets} lost packets before #{seq_num}")
-                    
+
                     # 增加已接收数据包计数
                     self.packets_received += 1
-                    
-                    # 记录日志
-                    with open(self.log_file, 'a', newline='') as f:
-                        writer = csv.writer(f)
-                        writer.writerow([
-                            seq_num, send_time, recv_time, delay,
-                            addr[0], addr[1], len(data)
-                        ])
-                    
+
+                    # 记录日志（失败不影响循环）
+                    self._append_log_entry(
+                        seq_num,
+                        send_time,
+                        recv_time,
+                        delay,
+                        addr,
+                        len(data),
+                    )
+
                     # 打印接收信息
                     if self.verbose:
-                        print(f"Received packet #{seq_num} from {addr[0]}:{addr[1]}, delay: {delay:.6f}s")
-                
-                except socket.timeout:
-                    # 超时只是为了定期检查是否应该退出循环
+                        print(
+                            f"Received packet #{seq_num} from {addr[0]}:{addr[1]}, delay: {delay:.6f}s"
+                        )
+
+                except Exception as exc:
+                    if self.verbose:
+                        print(
+                            f"Error processing packet from {addr[0]}:{addr[1]}: {exc}. Packet skipped."
+                        )
                     continue
-                except Exception as e:
-                    print(f"Error receiving packet: {e}")
-            
+
             # 计算总丢包率
             total_expected = self.packets_received + self.packets_lost
             packet_loss_rate = 0 if total_expected == 0 else (self.packets_lost / total_expected) * 100
@@ -177,14 +211,148 @@ class UDPReceiver:
         except KeyboardInterrupt:
             print("\nReception interrupted by user.")
         finally:
-            self._udp_socket.close()
-    
+            if self._udp_socket:
+                self._udp_socket.close()
+            self._close_log_file()
+
     def __del__(self):
         """析构函数，确保socket正确关闭"""
         try:
-            self._udp_socket.close()
+            if self._udp_socket:
+                self._udp_socket.close()
         except:
             pass
+        self._close_log_file()
+
+    def _init_log_writer(self) -> None:
+        """创建日志文件写入器，失败时禁用日志功能"""
+        try:
+            self._log_file_handle = open(self.log_file, "w", newline="")
+            self._log_writer = csv.writer(self._log_file_handle)
+            self._log_writer.writerow([
+                "seq_num",
+                "send_timestamp",
+                "recv_timestamp",
+                "delay",
+                "src_ip",
+                "src_port",
+                "packet_size",
+            ])
+            self._log_file_handle.flush()
+            self._logging_enabled = True
+            self._log_write_count = 0
+        except OSError as exc:
+            self._logging_enabled = False
+            self._close_log_file()
+            if self.verbose:
+                print(f"Unable to initialize log file {self.log_file}: {exc}. Logging disabled.")
+
+    def _append_log_entry(
+        self,
+        seq_num: int,
+        send_time: float,
+        recv_time: float,
+        delay: float,
+        addr: Tuple[str, int],
+        packet_size: int,
+    ) -> None:
+        if not self._logging_enabled or self._log_writer is None:
+            return
+        try:
+            self._log_writer.writerow([
+                seq_num,
+                send_time,
+                recv_time,
+                delay,
+                addr[0],
+                addr[1],
+                packet_size,
+            ])
+            self._log_write_count += 1
+            if self._log_write_count % 10 == 0 and self._log_file_handle:
+                self._log_file_handle.flush()
+        except OSError as exc:
+            self._handle_log_failure(exc)
+
+    def _handle_log_failure(self, exc: OSError) -> None:
+        if self.verbose:
+            print(f"Failed to write UDP receiver log entry: {exc}. Logging disabled.")
+        self._logging_enabled = False
+        self._close_log_file()
+
+    def _close_log_file(self) -> None:
+        if self._log_file_handle is not None:
+            try:
+                self._log_file_handle.close()
+            except OSError:
+                pass
+        self._log_file_handle = None
+        self._log_writer = None
+
+    def _retry_sleep(self) -> float:
+        return min(MAX_RETRY_SLEEP, max(MIN_RETRY_SLEEP, self._retry_base_interval))
+
+    def _recv_packet_with_retry(self) -> Optional[Tuple[bytes, Tuple[str, int], float]]:
+        if self._udp_socket is None:
+            self._recreate_socket()
+            time.sleep(self._retry_sleep())
+            return None
+        try:
+            data, addr = self._udp_socket.recvfrom(self.buffer_size)
+            return data, addr, time.time()
+        except socket.timeout:
+            # 用于周期性检查退出条件
+            return None
+        except OSError as exc:
+            self._handle_socket_error(exc)
+            return None
+        except Exception as exc:
+            if self.verbose:
+                print(f"Unexpected error while receiving UDP packet: {exc}. Retrying...")
+            time.sleep(self._retry_sleep())
+            return None
+
+    def _handle_socket_error(self, exc: OSError) -> None:
+        err = exc.errno if isinstance(exc, OSError) else None
+        if self.verbose:
+            print(
+                f"Socket error while receiving UDP packet: {exc}"
+                + (f" (errno={err})" if err is not None else "")
+            )
+
+        if err in RETRYABLE_NETWORK_ERRNOS:
+            time.sleep(self._retry_sleep())
+            return
+
+        if self.verbose and err in RECREATE_SOCKET_ERRNOS:
+            print("Socket no longer valid, recreating descriptor...")
+
+        self._recreate_socket()
+        time.sleep(self._retry_sleep())
+
+    def _recreate_socket(self, initial: bool = False) -> None:
+        if self._udp_socket is not None:
+            try:
+                self._udp_socket.close()
+            except OSError:
+                pass
+
+        while True:
+            try:
+                sock = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind((self.local_ip, self.local_port))
+                sock.settimeout(DEFAULT_SOCKET_TIMEOUT)
+                self._udp_socket = sock
+                if self.verbose and not initial:
+                    print(
+                        f"Socket recreated: {self.local_ip}:{self.local_port} waiting for packets"
+                    )
+                return
+            except OSError as exc:
+                if self.verbose:
+                    print(f"Failed to create/bind UDP socket: {exc}. Retrying in 1s...")
+                time.sleep(1.0)
 
 
 def parse_args() -> Dict[str, Any]:
