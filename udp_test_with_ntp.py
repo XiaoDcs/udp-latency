@@ -581,6 +581,10 @@ class UDPTestManager:
         
         # 创建日志目录
         os.makedirs(self.log_path, exist_ok=True)
+
+        # 当前运行的时间戳，用于所有日志文件命名保持一致
+        self.run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        self.monitor_file = os.path.join(self.log_path, f"system_monitor_{self.run_timestamp}.jsonl")
         
         # 设置日志
         self.setup_logging()
@@ -617,10 +621,10 @@ class UDPTestManager:
         self.nexfi_interval = config.get('nexfi_interval', 1.0)
         self.nexfi_device = config.get('nexfi_device', 'adhoc0')
         self.nexfi_bat_interface = config.get('nexfi_bat_interface', 'bat0')
-    
+
     def setup_logging(self):
         """设置日志"""
-        log_file = os.path.join(self.log_path, f"udp_test_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+        log_file = os.path.join(self.log_path, f"udp_test_{self.run_timestamp}.log")
         
         logging.basicConfig(
             level=logging.INFO,
@@ -631,7 +635,39 @@ class UDPTestManager:
             ]
         )
         self.logger = logging.getLogger(f"{__name__}.UDPTestManager")
-    
+
+    def _forward_process_stream(self, stream, label: str, stream_name: str):
+        """持续读取子进程输出并打标签打印。"""
+        if stream is None:
+            return
+
+        def _reader():
+            for raw_line in iter(stream.readline, ''):
+                line = raw_line.rstrip()
+                if line:
+                    self.logger.info("[%s][%s] %s", label, stream_name.upper(), line)
+            stream.close()
+
+        threading.Thread(target=_reader, daemon=True).start()
+
+    def _spawn_logged_process(self, label: str, cmd: List[str]) -> Optional[subprocess.Popen]:
+        """启动子进程并将其stdout/stderr实时转发至主日志。"""
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+            )
+        except Exception as exc:
+            self.logger.error("Failed to start %s process: %s", label, exc)
+            return None
+
+        self._forward_process_stream(process.stdout, label, 'stdout')
+        self._forward_process_stream(process.stderr, label, 'stderr')
+        return process
+
     def start_gps_logging(self) -> bool:
         """启动GPS记录器"""
         if not self.enable_gps:
@@ -669,23 +705,21 @@ class UDPTestManager:
                 cmd.append('--sim-time')
             
             # 启动GPS记录器进程
-            self.gps_process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            
+            self.gps_process = self._spawn_logged_process("GPS", cmd)
+            if not self.gps_process:
+                return False
+
             # 等待一下确保GPS记录器启动
             time.sleep(2)
-            
+
             # 检查进程是否正常运行
             if self.gps_process.poll() is None:
                 self.logger.info(f"GPS logger started successfully (will run for {total_gps_time}s)")
                 return True
             else:
-                stdout, stderr = self.gps_process.communicate()
-                self.logger.error(f"GPS logger failed to start: {stderr}")
+                self.logger.error(
+                    "GPS logger exited immediately with code %s", self.gps_process.returncode
+                )
                 return False
                 
         except Exception as e:
@@ -744,23 +778,21 @@ class UDPTestManager:
             ]
             
             # 启动Nexfi状态记录器进程
-            self.nexfi_process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            
+            self.nexfi_process = self._spawn_logged_process("NEXFI", cmd)
+            if not self.nexfi_process:
+                return False
+
             # 等待一下确保Nexfi记录器启动
             time.sleep(2)
-            
+
             # 检查进程是否正常运行
             if self.nexfi_process.poll() is None:
                 self.logger.info(f"Nexfi status logger started successfully (will run for {total_nexfi_time}s)")
                 return True
             else:
-                stdout, stderr = self.nexfi_process.communicate()
-                self.logger.warning(f"Nexfi status logger failed to start: {stderr}")
+                self.logger.warning(
+                    "Nexfi status logger exited immediately with code %s", self.nexfi_process.returncode
+                )
                 self.logger.info("Nexfi status logger will use mock data")
                 return True  # 返回True因为可以使用模拟数据
                 
@@ -832,8 +864,7 @@ class UDPTestManager:
                 }
                 
                 # 写入监控日志
-                monitor_file = os.path.join(self.log_path, "system_monitor.jsonl")
-                with open(monitor_file, 'a') as f:
+                with open(self.monitor_file, 'a') as f:
                     f.write(json.dumps(status_info) + '\n')
                 
                 # 如果启用NTP且同步状态异常，发出警告

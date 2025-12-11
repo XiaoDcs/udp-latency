@@ -469,7 +469,7 @@ sudo ip route add <peer-ip>/32 via <static-route-via> [dev <interface>]
 
 ### NTP同步日志
 - `ntp_sync_YYYYMMDD_HHMMSS.log`: NTP同步过程日志
-- `system_monitor.jsonl`: 系统状态监控日志 (JSON Lines格式)
+- `system_monitor_YYYYMMDD_HHMMSS.jsonl`: 系统状态监控日志 (JSON Lines格式，使用 `ls -t logs/system_monitor_*.jsonl | head -1` 可快速找到最新文件)
 
 ### UDP测试日志
 - `udp_sender_YYYYMMDD_HHMMSS.csv`: 发送端日志
@@ -1180,7 +1180,7 @@ grep "准备时间" standard_ntp.log skip_ntp.log
 grep "UDP通信时间" standard_ntp.log skip_ntp.log
 
 # 检查系统监控日志差异
-tail -5 logs/system_monitor.jsonl | jq '.ntp_enabled'
+tail -5 $(ls -t logs/system_monitor_*.jsonl | head -1) | jq '.ntp_enabled'
 ```
 
 ### 测试场景5: 故障排除模式
@@ -1271,9 +1271,10 @@ else
 fi
 
 echo "4. 检查系统监控日志..."
-if [ -f "logs/system_monitor.jsonl" ]; then
+latest_monitor=$(ls -t logs/system_monitor_*.jsonl 2>/dev/null | head -1)
+if [ -n "$latest_monitor" ]; then
     echo "最新监控记录:"
-    tail -1 logs/system_monitor.jsonl | jq '.'
+    tail -1 "$latest_monitor" | jq '.'
     echo "✓ 监控日志格式正确"
 else
     echo "⚠ 监控日志文件未找到"
@@ -1293,7 +1294,7 @@ ls -la *test.log
 - ROS2日志: `~/.ros/log/`
 
 对于新功能相关的问题：
-- NTP跳过功能: 检查 `system_monitor.jsonl` 中的 `ntp_enabled` 字段
+- NTP跳过功能: 检查 `system_monitor_*.jsonl` 中的 `ntp_enabled` 字段
 - 独立NTP IP: 检查网络路由和连通性
 - 参数兼容性: 查看详细的错误日志
 

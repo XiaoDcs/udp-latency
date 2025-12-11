@@ -73,7 +73,7 @@ echo "# 实时查看UDP接收日志"
 echo "tail -f logs/udp_receiver_*.csv"
 echo ""
 echo "# 查看系统监控状态"
-echo "tail -f logs/system_monitor.jsonl | jq ."
+echo "tail -f \$(ls -t logs/system_monitor_*.jsonl | head -1) | jq ."
 echo ""
 
 echo "8. 故障排查"
