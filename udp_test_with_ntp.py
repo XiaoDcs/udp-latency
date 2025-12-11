@@ -536,6 +536,9 @@ rtcsync
                         print(f"⚠️  NTP服务器IP {self.ntp_server_ip} 不在本机接口上")
                         print(f"   chrony将尝试监听所有接口 (0.0.0.0)")
                         return True  # 不阻止继续，让chrony尝试
+                else:
+                    print("❌ 无法获取网络接口信息，ip命令返回非0状态码")
+                    return False
             else:
                 # 对于client，检查能否ping通服务器
                 print(f"🔍 检查到NTP服务器 {self.ntp_server_ip} 的网络连接...")
@@ -793,11 +796,13 @@ class UDPTestManager:
                 self.logger.info(f"Nexfi status logger started successfully (will run for {total_nexfi_time}s)")
                 return True
             else:
+                exit_code = self.nexfi_process.returncode
                 self.logger.warning(
-                    "Nexfi status logger exited immediately with code %s", self.nexfi_process.returncode
+                    "Nexfi status logger exited immediately with code %s", exit_code
                 )
-                self.logger.info("Nexfi status logger will use mock data")
-                return True  # 返回True因为可以使用模拟数据
+                self.logger.warning("Nexfi metrics will be unavailable for this run")
+                self.nexfi_process = None
+                return False
                 
         except Exception as e:
             self.logger.error(f"Failed to start Nexfi status logger: {e}")
@@ -969,6 +974,10 @@ class UDPTestManager:
             # 1. 设置时间同步（可选）
             if self.enable_ntp:
                 print(f"\n{step_num}. 设置时间同步...")
+                if self.ntp_manager is None:
+                    self.logger.error("NTP manager 未初始化，无法执行时间同步")
+                    print("✗ NTP管理器未初始化，测试终止")
+                    return False
                 if not self.ntp_manager.setup_time_sync(skip_config=self.skip_ntp_config):
                     print("✗ 时间同步设置失败，测试终止")
                     return False

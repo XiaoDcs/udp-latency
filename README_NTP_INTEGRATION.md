@@ -38,7 +38,7 @@
 
 ```bash
 # 1. 克隆仓库到本地
-git clone <repository-url>
+git clone https://github.com/XiaoDcs/udp-latency
 cd udp-latency
 
 # 2. 运行一键部署脚本
@@ -68,7 +68,24 @@ source venv/bin/activate
 ./check_environment.sh
 ```
 
-### 3. 立即开始测试
+### 3. 启动 Scripts 目录下的 tmux 主流程（推荐）
+
+Scripts 目录提供了成对的 tmux 自动化脚本，会依次启动 Aerostack2、附着到会话确认状态，然后在新的 tmux 窗口里激活虚拟环境并执行 `start_test.sh`。它们已经内置常用 IP、Nexfi、GPS 与静态路由参数，是部署后主流程的首选入口：
+
+- `scripts/run_drone12_tmux.sh`：发送端一键流程，默认把 drone12 作为 UDP 发送端，结束前保持 `drone12_udp` tmux 会话持续运行。
+- `scripts/run_drone9_tmux.sh`：接收端一键流程，默认把 drone9 作为 UDP 接收端，并将 `start_test.sh receiver ...` 固定在 `drone9_udp` tmux 中。
+
+两脚本的可选参数（`--auto-udp`、`--skip-udp`、`--skip-aero` 等）可控制是否跳过 Aerostack2 或自动发起 UDP 测试；通过环境变量可覆盖 ROS/Aerostack/虚拟环境路径。执行示例：
+
+```bash
+cd scripts
+./run_drone12_tmux.sh      # 推荐在发送端无人机上运行
+./run_drone9_tmux.sh       # 推荐在接收端无人机上运行
+```
+
+当需要针对不同无人机或 IP 组合时，可通过环境变量（如 `DRONE_ID`、`ROS_DOMAIN_ID_VALUE`、`UDP_PROJECT`）或直接编辑脚本来调整参数。脚本会在 tmux 中持续运行测试，即使 SSH 断连也不会中断。
+
+### 4. 手动运行 start_test.sh（按需）
 
 #### 基本测试（包含NTP时间同步）
 
@@ -197,6 +214,10 @@ udp-latency/
 ├── nexfi_client.py            # Nexfi通信状态记录器 ⭐
 ├── example_usage.sh           # 使用示例
 ├── check_environment.sh       # 环境检查脚本
+├── scripts/                   # 自动化脚本目录（主流程在此）
+│   ├── run_drone12_tmux.sh    # 发送端 tmux 启动脚本（推荐）
+│   ├── run_drone9_tmux.sh     # 接收端 tmux 启动脚本（推荐）
+│   └── ...                    # 其他运维脚本（如 stop_aerostack_tmux.sh）
 ├── README_NTP_INTEGRATION.md  # 本文档
 ├── venv/                      # Python虚拟环境 (setup.sh创建)
 ├── logs/                      # 测试日志目录 (自动创建)
@@ -225,10 +246,12 @@ udp-latency/
 
 ### Nexfi通信状态记录额外要求 (setup.sh会自动安装)
 - requests 库 (HTTP请求)
-- Nexfi通信模块设备 (可选，无设备时使用模拟数据)
+- Nexfi通信模块设备 (可选，无法连接时仅跳过状态记录)
 - 网络连接到Nexfi设备 (通常为192.168.104.1)
 
 ## 详细使用说明
+
+> 推荐：先使用 `scripts/run_drone12_tmux.sh` 与 `scripts/run_drone9_tmux.sh` 完成标准发送端/接收端流程，它们会自动调用 `start_test.sh` 并保持 tmux 会话。以下章节介绍如何在需要自定义参数或排障时手动执行各组件。
 
 ### 文件部署
 
@@ -783,9 +806,11 @@ except:
 "
 ```
 
-### 模拟数据模式
+### Nexfi设备不可达时的行为
 
-当无法连接到Nexfi设备时，记录器会自动使用模拟数据继续运行，确保测试不会中断。模拟数据包含合理的默认值，可用于测试和开发。
+当无法连接到Nexfi设备时，`nexfi_client.py` 会直接退出并提示检查设备连接，不会写入任何伪造或模拟的数据。主测试流程（udp_test_with_ntp.py、UDP收发脚本等）会继续执行，只是不会生成新的 Nexfi 状态日志。
+
+> 提示：若需要无设备情况下快速验证主流程，可在 `config` 中关闭 `enable_nexfi`，或允许脚本在启动时提示“将跳过Nexfi状态记录”，这样既不会阻塞测试，也不会产生失真的实验结果。
 
 ## 时间同步机制
 
@@ -910,7 +935,7 @@ curl http://192.168.104.1/ubus
 ```
 
 #### 8. Nexfi数据获取失败
-**症状**: Nexfi日志显示模拟数据
+**症状**: Nexfi日志为空，或控制台提示“Nexfi状态记录器无法获取真实数据，将直接退出”
 **解决方案**:
 ```bash
 # 检查Nexfi设备状态

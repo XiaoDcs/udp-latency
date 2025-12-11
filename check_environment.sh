@@ -175,7 +175,7 @@ if timeout 2 ping -c 1 192.168.104.1 &> /dev/null; then
 elif timeout 2 curl -s http://192.168.104.1 &> /dev/null; then
     print_pass "HTTP可达"
 else
-    print_warn "不可达（Nexfi记录将使用模拟数据）"
+    print_warn "不可达（Nexfi记录将被跳过）"
 fi
 
 # 12. 检查日志目录

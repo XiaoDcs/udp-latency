@@ -476,8 +476,8 @@ class NexfiStatusLogger:
             )
         except Exception as e:
             print(f"连接Nexfi设备失败: {e}")
-            print("将使用模拟数据继续运行...")
-            self.client = None
+            print("Nexfi状态记录器无法获取真实数据，将直接退出")
+            raise
         
         # 初始化CSV文件
         self.init_csv_file()
@@ -590,72 +590,10 @@ class NexfiStatusLogger:
             self.topology_edges_initialized = False
             self.topology_edges_disabled = True
     
-    def get_mock_data(self) -> Dict[str, Any]:
-        """获取模拟数据（当无法连接到Nexfi设备时使用）"""
-        # 模拟拓扑数据
-        mock_topology = [
-            {
-                "id": "1",
-                "neighbors": [
-                    {
-                        "id": "2",
-                        "metric": 180.0,
-                        "quality": "good"
-                    }
-                ]
-            },
-            {
-                "id": "2", 
-                "neighbors": [
-                    {
-                        "id": "1",
-                        "metric": 175.0,
-                        "quality": "good"
-                    }
-                ]
-            }
-        ]
-        
-        mock_nodes = [
-            {
-                'macaddr': 'b8:8e:df:01:e7:d5',
-                'rssi': -65.0,
-                'snr': 25.0,
-                'nodeid': '2',
-                'ipaddr': '192.168.104.9',
-                'link_metric': 185.0,
-                'tx_rate': 24.0,
-                'topology_snr': 30.0,
-                'last_seen': '0'
-            }
-        ]
-
-        return {
-            'mesh_enabled': True,
-            'channel': '149',
-            'frequency_band': '20',
-            'tx_power': '20',
-            'work_mode': 'adhoc',
-            'node_id': '1',
-            'node_ip': '192.168.104.12',
-            'connected_nodes': len(mock_nodes),
-            'avg_rssi': -65.0,
-            'avg_snr': 25.0,
-            'throughput': '50.5',
-            'cpu_usage': '15%',
-            'memory_usage': '45%',
-            'uptime': '2h 30m',
-            'firmware_version': 'v1.0.0',
-            'topology_nodes': 2,
-            'link_quality': 180.0,
-            'typology': mock_topology,
-            'nodeinfo_list': mock_nodes
-        }
-    
     def process_nexfi_data(self) -> Dict[str, Any]:
         """处理Nexfi数据，提取关键指标"""
         if not self.client:
-            return self.get_mock_data()
+            raise RuntimeError("Nexfi客户端未初始化，无法获取真实数据")
         
         try:
             # 获取各种状态信息
@@ -822,7 +760,7 @@ class NexfiStatusLogger:
         except Exception as e:
             if self.verbose:
                 print(f"获取Nexfi数据时出错: {e}")
-            return self.get_mock_data()
+            raise
     
     def log_nexfi_status(self):
         """记录Nexfi状态数据到文件（使用Unix时间戳格式）"""

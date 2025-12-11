@@ -210,11 +210,11 @@ try:
     response = requests.get('http://$NEXFI_IP', timeout=3)
     print('Nexfi设备连接正常')
 except:
-    print('Nexfi设备连接失败，将使用模拟数据')
+    print('Nexfi设备连接失败：日志记录将被跳过')
 " 2>/dev/null; then
             print_success "Nexfi设备连接测试完成"
         else
-            print_warning "Nexfi设备连接测试失败，将使用模拟数据继续运行"
+            print_warning "Nexfi设备连接测试失败，将跳过Nexfi状态记录"
         fi
     fi
     
