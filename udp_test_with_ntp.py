@@ -576,14 +576,17 @@ class UDPTestManager:
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.log_path = config.get('log_path', './logs')
+        base_log_path = config.get('log_path', './logs')
+        self.base_log_path = os.path.abspath(base_log_path)
         self.mode = config.get('mode', 'sender')  # 'sender' or 'receiver'
         
         # 创建日志目录
-        os.makedirs(self.log_path, exist_ok=True)
+        os.makedirs(self.base_log_path, exist_ok=True)
 
         # 当前运行的时间戳，用于所有日志文件命名保持一致
         self.run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        self.log_path = os.path.join(self.base_log_path, self.run_timestamp)
+        os.makedirs(self.log_path, exist_ok=True)
         self.monitor_file = os.path.join(self.log_path, f"system_monitor_{self.run_timestamp}.jsonl")
         
         # 设置日志

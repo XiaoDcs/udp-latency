@@ -342,6 +342,7 @@ show_config() {
     echo "本地IP:       $LOCAL_IP"
     echo "对方IP:       $PEER_IP"
     echo "日志路径:     $LOG_PATH"
+    echo "日志结构:     每次运行会在该目录下生成 YYYYMMDD_HHMMSS 子目录"
     
     # 计算时间配置
     UDP_TIME=$RUNNING_TIME
@@ -485,7 +486,7 @@ run_test() {
     # 执行测试
     if eval "$cmd"; then
         print_success "测试完成！"
-        print_info "日志文件保存在: $LOG_PATH"
+        print_info "日志文件保存在: $LOG_PATH/时间戳 子目录 (具体路径已在上方 Python 输出中提示)"
         return 0
     else
         print_error "测试失败！"

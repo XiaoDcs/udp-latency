@@ -200,6 +200,13 @@ udp-latency/
 ├── README_NTP_INTEGRATION.md  # 本文档
 ├── venv/                      # Python虚拟环境 (setup.sh创建)
 ├── logs/                      # 测试日志目录 (自动创建)
+│   └── 20231211_153045/       # 每次运行自动创建的时间戳子目录 (示例)
+│       ├── udp_test_20231211_153045.log
+│       ├── system_monitor_20231211_153045.jsonl
+│       ├── udp_receiver_20231211_153045.csv
+│       ├── gps_logger_drone9_20231211_153045.csv
+│       ├── nexfi_status_20231211_153045.csv
+│       └── typology_edges_20231211_153045.csv
 └── backups/                   # 备份目录 (自动创建)
 ```
 
@@ -465,23 +472,34 @@ sudo ip route add <peer-ip>/32 via <static-route-via> [dev <interface>]
 
 ## 日志文件说明
 
-测试完成后，会在指定的日志目录生成以下文件：
+每次执行 `udp_test_with_ntp.py` 时，都会在 `logs/` 目录下创建一个以 `YYYYMMDD_HHMMSS` 命名的子目录，本文称之为 `RUN_DIR`。所有本次实验产生的日志文件都会集中保存在该目录中，方便一次性复制与归档。
+
+快速定位最新一次实验的目录：
+
+```bash
+RUN_DIR=$(ls -td logs/*/ | head -1)
+echo "当前分析目录: $RUN_DIR"
+```
+
+后续命令示例中若出现 `$RUN_DIR`，请替换为上述得到的路径。
+
+测试完成后，会在 `RUN_DIR` 内生成以下文件：
 
 ### NTP同步日志
-- `ntp_sync_YYYYMMDD_HHMMSS.log`: NTP同步过程日志
-- `system_monitor_YYYYMMDD_HHMMSS.jsonl`: 系统状态监控日志 (JSON Lines格式，使用 `ls -t logs/system_monitor_*.jsonl | head -1` 可快速找到最新文件)
+- `RUN_DIR/ntp_sync_YYYYMMDD_HHMMSS.log`: NTP同步过程日志
+- `RUN_DIR/system_monitor_YYYYMMDD_HHMMSS.jsonl`: 系统状态监控日志 (JSON Lines格式)
 
 ### UDP测试日志
-- `udp_sender_YYYYMMDD_HHMMSS.csv`: 发送端日志
-- `udp_receiver_YYYYMMDD_HHMMSS.csv`: 接收端日志
-- `udp_test_YYYYMMDD_HHMMSS.log`: 测试过程日志
+- `RUN_DIR/udp_sender_YYYYMMDD_HHMMSS.csv`: 发送端日志
+- `RUN_DIR/udp_receiver_YYYYMMDD_HHMMSS.csv`: 接收端日志
+- `RUN_DIR/udp_test_YYYYMMDD_HHMMSS.log`: 测试过程日志
 
 ### GPS记录日志
-- `gps_logger_[drone_id]_YYYYMMDD_HHMMSS.csv`: GPS位置和状态日志
+- `RUN_DIR/gps_logger_[drone_id]_YYYYMMDD_HHMMSS.csv`: GPS位置和状态日志
 
 ### Nexfi通信状态日志
-- `nexfi_status_YYYYMMDD_HHMMSS.csv`: Nexfi通信模块状态和链路质量日志（逐链路行，包含Wi‑Fi物理层、链路统计、系统负载等扩展字段）
-- `logs/typology/typology_edges_YYYYMMDD_HHMMSS.csv` 🆕: 每次轮询生成的拓扑边CSV，记录整张Mesh图中任意路由器与邻居的metric/tx_rate/SNR/last_seen，可直接做全网分析
+- `RUN_DIR/nexfi_status_YYYYMMDD_HHMMSS.csv`: Nexfi通信模块状态和链路质量日志（逐链路行，包含Wi‑Fi物理层、链路统计、系统负载等扩展字段）
+- `RUN_DIR/typology_edges_YYYYMMDD_HHMMSS.csv` 🆕: 每次轮询生成的拓扑边CSV，记录整张Mesh图中任意路由器与邻居的metric/tx_rate/SNR/last_seen，可直接做全网分析
 
 ### 日志格式示例
 
@@ -732,7 +750,7 @@ python3 nexfi_client.py --help
 
 ### 拓扑边CSV字段说明 🆕
 
-`logs/typology/typology_edges_*.csv` 会为每次轮询追加整张Mesh中的所有边，字段定义如下：
+`$RUN_DIR/typology_edges_*.csv` 会为每次轮询追加整张Mesh中的所有边，字段定义如下：
 
 | 字段名 | 说明 |
 |--------|------|
@@ -924,12 +942,16 @@ date +%s.%N
 
 ```bash
 # 检查GPS日志文件
-tail -f ./logs/gps_logger_drone0_*.csv
+tail -f "$RUN_DIR"/gps_logger_drone0_*.csv
 
 # 验证GPS数据格式
 python3 -c "
+import os, glob
 import pandas as pd
-df = pd.read_csv('./logs/gps_logger_drone0_*.csv')
+
+run_dir = os.environ.get('RUN_DIR') or sorted(glob.glob('logs/*/'))[-1]
+gps_file = sorted(glob.glob(os.path.join(run_dir, 'gps_logger_drone0_*.csv')))[0]
+df = pd.read_csv(gps_file)
 print(df.head())
 print(f'GPS记录数: {len(df)}')
 print(f'有效GPS坐标数: {len(df[(df.latitude != 0) | (df.longitude != 0)])}')
@@ -964,9 +986,11 @@ print(f'有效GPS坐标数: {len(df[(df.latitude != 0) | (df.longitude != 0)])}'
 ```python
 import pandas as pd
 import matplotlib.pyplot as plt
+import os, glob
 
-# 读取GPS数据
-df = pd.read_csv('logs/gps_logger_drone0_*.csv')
+run_dir = os.environ.get('RUN_DIR') or sorted(glob.glob('logs/*/'))[-1]
+gps_file = sorted(glob.glob(os.path.join(run_dir, 'gps_logger_drone0_*.csv')))[0]
+df = pd.read_csv(gps_file)
 
 # 绘制轨迹图
 plt.figure(figsize=(10, 8))
@@ -984,8 +1008,12 @@ plt.show()
 ### 通信质量分析
 ```python
 # 结合GPS和UDP数据分析通信质量与位置的关系
-gps_df = pd.read_csv('logs/gps_logger_drone0_*.csv')
-udp_df = pd.read_csv('logs/udp_receiver_*.csv')
+import os, glob
+run_dir = os.environ.get('RUN_DIR') or sorted(glob.glob('logs/*/'))[-1]
+gps_file = sorted(glob.glob(os.path.join(run_dir, 'gps_logger_drone0_*.csv')))[0]
+udp_file = sorted(glob.glob(os.path.join(run_dir, 'udp_receiver_*.csv')))[0]
+gps_df = pd.read_csv(gps_file)
+udp_df = pd.read_csv(udp_file)
 
 # 时间对齐和分析
 # ... 分析代码
@@ -995,9 +1023,11 @@ udp_df = pd.read_csv('logs/udp_receiver_*.csv')
 ```python
 import pandas as pd
 import matplotlib.pyplot as plt
+import os, glob
 
-# 读取Nexfi状态数据
-nexfi_df = pd.read_csv('logs/nexfi_status_*.csv')
+run_dir = os.environ.get('RUN_DIR') or sorted(glob.glob('logs/*/'))[-1]
+nexfi_file = sorted(glob.glob(os.path.join(run_dir, 'nexfi_status_*.csv')))[0]
+nexfi_df = pd.read_csv(nexfi_file)
 
 # 绘制信号强度和信噪比变化
 fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
@@ -1032,9 +1062,14 @@ import pandas as pd
 import numpy as np
 
 # 读取所有数据
-udp_df = pd.read_csv('logs/udp_receiver_*.csv')
-gps_df = pd.read_csv('logs/gps_logger_*.csv')
-nexfi_df = pd.read_csv('logs/nexfi_status_*.csv')
+import os, glob
+run_dir = os.environ.get('RUN_DIR') or sorted(glob.glob('logs/*/'))[-1]
+udp_file = sorted(glob.glob(os.path.join(run_dir, 'udp_receiver_*.csv')))[0]
+gps_file = sorted(glob.glob(os.path.join(run_dir, 'gps_logger_*.csv')))[0]
+nexfi_file = sorted(glob.glob(os.path.join(run_dir, 'nexfi_status_*.csv')))[0]
+udp_df = pd.read_csv(udp_file)
+gps_df = pd.read_csv(gps_file)
+nexfi_df = pd.read_csv(nexfi_file)
 
 # 时间对齐（使用最近邻匹配）
 def align_data(df1, df2, time_col='timestamp'):
@@ -1180,7 +1215,7 @@ grep "准备时间" standard_ntp.log skip_ntp.log
 grep "UDP通信时间" standard_ntp.log skip_ntp.log
 
 # 检查系统监控日志差异
-tail -5 $(ls -t logs/system_monitor_*.jsonl | head -1) | jq '.ntp_enabled'
+tail -5 $(ls -t "$RUN_DIR"/system_monitor_*.jsonl | head -1) | jq '.ntp_enabled'
 ```
 
 ### 测试场景5: 故障排除模式
@@ -1271,7 +1306,12 @@ else
 fi
 
 echo "4. 检查系统监控日志..."
-latest_monitor=$(ls -t logs/system_monitor_*.jsonl 2>/dev/null | head -1)
+latest_run=$(ls -td logs/*/ 2>/dev/null | head -1)
+if [ -n "$latest_run" ]; then
+    latest_monitor=$(ls -t "${latest_run}"/system_monitor_*.jsonl 2>/dev/null | head -1)
+else
+    latest_monitor=""
+fi
 if [ -n "$latest_monitor" ]; then
     echo "最新监控记录:"
     tail -1 "$latest_monitor" | jq '.'
@@ -1290,11 +1330,11 @@ ls -la *test.log
 如果遇到问题，请检查以下日志文件：
 - 系统日志: `/var/log/syslog`
 - Chrony日志: `/var/log/chrony/`
-- 测试日志: `./logs/`
+- 测试日志: `./logs/<timestamp>/`
 - ROS2日志: `~/.ros/log/`
 
 对于新功能相关的问题：
-- NTP跳过功能: 检查 `system_monitor_*.jsonl` 中的 `ntp_enabled` 字段
+- NTP跳过功能: 检查 `RUN_DIR/system_monitor_*.jsonl` 中的 `ntp_enabled` 字段
 - 独立NTP IP: 检查网络路由和连通性
 - 参数兼容性: 查看详细的错误日志
 
@@ -1384,13 +1424,13 @@ GPS启动缓慢
 **监控和诊断**:
 ```bash
 # 查看详细时间分解
-grep "准备时间" logs/udp_test_*.log
-grep "总运行时间" logs/udp_test_*.log
+grep "准备时间" "$RUN_DIR"/udp_test_*.log
+grep "总运行时间" "$RUN_DIR"/udp_test_*.log
 
 # 检查各组件启动时间
-grep "NTP.*成功" logs/udp_test_*.log
-grep "GPS.*启动成功" logs/udp_test_*.log
-grep "Nexfi.*启动成功" logs/udp_test_*.log
+grep "NTP.*成功" "$RUN_DIR"/udp_test_*.log
+grep "GPS.*启动成功" "$RUN_DIR"/udp_test_*.log
+grep "Nexfi.*启动成功" "$RUN_DIR"/udp_test_*.log
 ```
 
 ### 自动化测试脚本建议

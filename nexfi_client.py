@@ -453,15 +453,12 @@ class NexfiStatusLogger:
         
         self.running = True
         
-        self.typology_path = os.path.join(self.log_path, "typology/")
         # 确保日志目录存在
         os.makedirs(self.log_path, exist_ok=True)
-        # 创建目录保存网络拓扑信息
-        os.makedirs(self.typology_path, exist_ok=True)
         # 生成日志文件名（与UDP测试系统保持一致的命名格式）
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.log_file = os.path.join(self.log_path, f"nexfi_status_{timestamp}.csv")
-        self.topology_edges_file = os.path.join(self.typology_path, f"typology_edges_{timestamp}.csv")
+        self.topology_edges_file = os.path.join(self.log_path, f"typology_edges_{timestamp}.csv")
         self.topology_edges_initialized = False
         self.topology_edges_disabled = False
         
