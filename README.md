@@ -8,4 +8,4 @@
 - 通信信息基于NEXFI采集
 
 ## 完整文档
-见 `README_NTP_INTEGRATION.md`
+见 `README_DETAIL.md`

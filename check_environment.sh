@@ -220,7 +220,7 @@ else
     echo ""
     echo "建议："
     echo "1. 运行 ./setup.sh 自动安装依赖"
-    echo "2. 查看 README_NTP_INTEGRATION.md 了解详细要求"
+    echo "2. 查看 README_DETAIL.md 了解详细要求"
 fi
 
 echo "==========================================" 
