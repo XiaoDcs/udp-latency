@@ -32,8 +32,8 @@ source venv/bin/activate
 ## 4. 更多选项
 
 ```bash
-# 查看使用示例
-./example_usage.sh
+# 查看帮助
+./start_test.sh --help
 
 # 查看详细文档
 cat README_NTP_INTEGRATION.md

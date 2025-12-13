@@ -86,7 +86,9 @@ show_help() {
     echo ""
     echo "NTP时间同步选项:"
     echo "  --skip-ntp               完全跳过NTP时间同步功能"
-    echo "  --ntp-peer-ip=IP         NTP对时的对方IP地址 (默认使用--peer-ip的值)"
+    echo "  --ntp-peer-ip=IP         NTP对时链路的对端IP (默认使用--peer-ip的值)"
+    echo "                           receiver: 作为NTP客户端，连接该IP作为NTP服务器"
+    echo "                           sender:   作为NTP服务器，用该IP推导allow网段/验证对端连接"
     echo "  --skip-ntp-config        跳过chrony配置，使用现有配置"
     echo ""
     echo "GPS记录选项:"
@@ -342,7 +344,7 @@ show_config() {
     echo "本地IP:       $LOCAL_IP"
     echo "对方IP:       $PEER_IP"
     echo "日志路径:     $LOG_PATH"
-    echo "日志结构:     每次运行会在该目录下生成 YYYYMMDD_HHMMSS 子目录"
+    echo "日志结构:     每次运行会在该目录下生成 ${MODE}_YYYYMMDD_HHMMSS 子目录"
     
     # 计算时间配置
     UDP_TIME=$RUNNING_TIME
@@ -486,7 +488,7 @@ run_test() {
     # 执行测试
     if eval "$cmd"; then
         print_success "测试完成！"
-        print_info "日志文件保存在: $LOG_PATH/时间戳 子目录 (具体路径已在上方 Python 输出中提示)"
+        print_info "日志文件保存在: $LOG_PATH/${MODE}_<timestamp>/ (具体路径已在上方 Python 输出中提示)"
         return 0
     else
         print_error "测试失败！"

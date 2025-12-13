@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # 无人机UDP通信测试系统 - 环境检查脚本
 
@@ -13,6 +13,11 @@ NC='\033[0m' # No Color
 PASS_COUNT=0
 FAIL_COUNT=0
 WARN_COUNT=0
+
+# 默认检查参数（可通过环境变量覆盖）
+EXPECTED_LAN_PREFIX="${EXPECTED_LAN_PREFIX:-192.168.104.}"
+NEXFI_IP="${NEXFI_IP:-192.168.104.1}"
+VENV_DIR="${VENV_DIR:-venv}"
 
 # 打印函数
 print_check() {
@@ -34,6 +39,10 @@ print_warn() {
     ((WARN_COUNT++))
 }
 
+have_cmd() {
+    command -v "$1" >/dev/null 2>&1
+}
+
 echo "=========================================="
 echo "    无人机UDP通信测试系统 - 环境检查"
 echo "=========================================="
@@ -45,12 +54,12 @@ if [[ -f /etc/os-release ]]; then
     OS_NAME=$(grep "^NAME=" /etc/os-release | cut -d'"' -f2)
     print_pass "$OS_NAME"
 else
-    print_fail "无法检测操作系统"
+    print_warn "无法检测操作系统（非Linux环境将跳过部分检查）"
 fi
 
 # 2. 检查Python3
 print_check "Python3"
-if command -v python3 &> /dev/null; then
+if have_cmd "python3"; then
     PYTHON_VERSION=$(python3 --version 2>&1 | cut -d' ' -f2)
     print_pass "版本 $PYTHON_VERSION"
 else
@@ -59,70 +68,71 @@ fi
 
 # 3. 检查虚拟环境
 print_check "Python虚拟环境"
-if [[ -d "venv" ]]; then
-    print_pass "venv 目录存在"
+if [[ -f "${VENV_DIR}/bin/activate" ]]; then
+    print_pass "${VENV_DIR}/bin/activate 存在"
 else
-    print_fail "venv 目录不存在，请运行 setup.sh"
+    print_fail "${VENV_DIR}/bin/activate 不存在，请运行 ./setup.sh"
 fi
 
 # 4. 检查Python包（在虚拟环境中）
-if [[ -d "venv" ]]; then
-    source venv/bin/activate 2>/dev/null
-    
-    # 检查requests
-    print_check "requests库"
+if [[ -f "${VENV_DIR}/bin/activate" ]]; then
+    # shellcheck disable=SC1090
+    source "${VENV_DIR}/bin/activate" 2>/dev/null || true
+
+    print_check "requests库（启用 --enable-nexfi 时需要）"
     if python3 -c "import requests" 2>/dev/null; then
         VERSION=$(python3 -c "import requests; print(requests.__version__)")
         print_pass "版本 $VERSION"
     else
-        print_fail "未安装"
-    fi
-    
-    # 检查pandas
-    print_check "pandas库"
-    if python3 -c "import pandas" 2>/dev/null; then
-        VERSION=$(python3 -c "import pandas; print(pandas.__version__)")
-        print_pass "版本 $VERSION"
-    else
-        print_warn "未安装（数据分析需要）"
-    fi
-    
-    # 检查numpy
-    print_check "numpy库"
-    if python3 -c "import numpy" 2>/dev/null; then
-        VERSION=$(python3 -c "import numpy; print(numpy.__version__)")
-        print_pass "版本 $VERSION"
-    else
-        print_warn "未安装（数据分析需要）"
+        print_warn "未安装（不启用 Nexfi 仍可运行）"
     fi
 fi
 
 # 5. 检查chrony
 print_check "chrony (NTP服务)"
-if command -v chronyc &> /dev/null; then
+if have_cmd "chronyc"; then
     print_pass "已安装"
 else
-    print_fail "未安装，请运行: sudo apt-get install chrony"
+    print_fail "未安装（默认NTP对时需要）。建议: sudo apt-get install chrony"
 fi
 
-# 6. 检查网络工具
-print_check "网络工具"
-if command -v ping &> /dev/null && command -v netstat &> /dev/null; then
+# 6. 检查常用系统/网络工具（主流程依赖）
+print_check "ip/ping/timeout"
+missing_tools=()
+for tool in ip ping timeout; do
+    if ! have_cmd "$tool"; then
+        missing_tools+=("$tool")
+    fi
+done
+if [[ ${#missing_tools[@]} -eq 0 ]]; then
     print_pass "已安装"
 else
-    print_fail "缺少网络工具"
+    print_fail "缺少: ${missing_tools[*]}"
 fi
 
-# 7. 检查必要脚本文件
+# 7. 检查tmux（scripts/ 主流程推荐使用）
+print_check "tmux（scripts/ 推荐主流程）"
+if have_cmd "tmux"; then
+    print_pass "已安装"
+else
+    print_warn "未安装（不影响手动运行 start_test.sh）"
+fi
+
+# 8. 检查必要脚本文件
 echo ""
 echo "检查脚本文件："
 SCRIPTS=(
+    "setup.sh"
     "start_test.sh"
     "udp_test_with_ntp.py"
     "udp_sender.py"
     "udp_receiver.py"
     "gps.py"
     "nexfi_client.py"
+    "check_environment.sh"
+    "scripts/run_drone12_tmux.sh"
+    "scripts/run_drone9_tmux.sh"
+    "scripts/stop_aerostack_tmux.sh"
 )
 
 for script in "${SCRIPTS[@]}"; do
@@ -138,47 +148,51 @@ for script in "${SCRIPTS[@]}"; do
     fi
 done
 
-# 8. 检查ROS2环境（可选）
+# 9. 检查ROS2环境（可选）
 echo ""
 echo "检查可选组件："
 print_check "ROS2环境"
-if command -v ros2 &> /dev/null; then
+if have_cmd "ros2"; then
     ROS_DISTRO=${ROS_DISTRO:-"未设置"}
     print_pass "ROS2 $ROS_DISTRO"
 else
     print_warn "未安装（GPS记录需要）"
 fi
 
-# 9. 检查as2_python_api
+# 10. 检查as2_python_api
 print_check "as2_python_api"
 if python3 -c "from as2_python_api.drone_interface_gps import DroneInterfaceGPS" 2>/dev/null; then
     print_pass "已安装"
 else
-    print_warn "未安装（GPS记录需要）"
+    print_warn "未安装或未source环境（GPS记录需要）"
 fi
 
-# 10. 检查网络连接
+# 11. 检查网络连接
 echo ""
 echo "检查网络连接："
-print_check "本地IP配置"
-if ip addr show | grep -q "192.168.104"; then
-    LOCAL_IP=$(ip addr show | grep "192.168.104" | awk '{print $2}' | cut -d'/' -f1 | head -1)
-    print_pass "检测到 $LOCAL_IP"
+print_check "本地IP配置（期望网段: ${EXPECTED_LAN_PREFIX}*）"
+if have_cmd "ip"; then
+    if ip -o -4 addr show | grep -q "${EXPECTED_LAN_PREFIX}"; then
+        LOCAL_IP=$(ip -o -4 addr show | grep "${EXPECTED_LAN_PREFIX}" | awk '{print $4}' | cut -d'/' -f1 | head -1)
+        print_pass "检测到 $LOCAL_IP"
+    else
+        print_warn "未检测到 ${EXPECTED_LAN_PREFIX} 网段配置（如使用其他网段可忽略或设置 EXPECTED_LAN_PREFIX）"
+    fi
 else
-    print_warn "未检测到192.168.104网段配置"
+    print_warn "ip 命令不可用，跳过本地IP检查"
 fi
 
-# 11. 检查Nexfi设备连接
-print_check "Nexfi设备 (192.168.104.1)"
-if timeout 2 ping -c 1 192.168.104.1 &> /dev/null; then
+# 12. 检查Nexfi设备连接（可选）
+print_check "Nexfi设备 (${NEXFI_IP})"
+if timeout 2 ping -c 1 "${NEXFI_IP}" &> /dev/null; then
     print_pass "可达"
-elif timeout 2 curl -s http://192.168.104.1 &> /dev/null; then
+elif have_cmd "curl" && timeout 2 curl -s "http://${NEXFI_IP}" &> /dev/null; then
     print_pass "HTTP可达"
 else
     print_warn "不可达（Nexfi记录将被跳过）"
 fi
 
-# 12. 检查日志目录
+# 13. 检查日志目录
 print_check "日志目录"
 if [[ -d "logs" ]]; then
     print_pass "logs/ 目录存在"

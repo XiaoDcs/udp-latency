@@ -34,21 +34,20 @@
 
 ## 🚀 快速开始 (拉取仓库后必读)
 
-### 1. 克隆仓库后的第一步
+### 1. 部署第一步（两端路径保持一致）
 
 ```bash
-# 1. 克隆仓库到本地
-git clone https://github.com/XiaoDcs/udp-latency
+# 将仓库同步到两台无人机（git/scp/rsync 均可）
 cd udp-latency
 
-# 2. 运行一键部署脚本
+# 运行一键部署脚本
 chmod +x setup.sh
 ./setup.sh
 ```
 
 **setup.sh 会自动完成以下操作：**
 - ✅ 检查系统要求 (Linux + Python3)
-- ✅ 安装系统依赖 (chrony, 网络工具等)
+- ✅ 安装系统依赖 (chrony/iproute2/tmux/curl 等)
 - ✅ 创建Python虚拟环境
 - ✅ 安装Python依赖包
 - ✅ 设置文件权限
@@ -61,8 +60,8 @@ chmod +x setup.sh
 # 激活Python虚拟环境
 source venv/bin/activate
 
-# 查看使用示例
-./example_usage.sh
+# 查看帮助（推荐先读一遍）
+./start_test.sh --help
 
 # 运行环境检查（可选）
 ./check_environment.sh
@@ -212,23 +211,22 @@ udp-latency/
 ├── udp_receiver.py            # UDP接收端
 ├── gps.py                     # GPS数据记录器
 ├── nexfi_client.py            # Nexfi通信状态记录器 ⭐
-├── example_usage.sh           # 使用示例
 ├── check_environment.sh       # 环境检查脚本
 ├── scripts/                   # 自动化脚本目录（主流程在此）
 │   ├── run_drone12_tmux.sh    # 发送端 tmux 启动脚本（推荐）
 │   ├── run_drone9_tmux.sh     # 接收端 tmux 启动脚本（推荐）
 │   └── ...                    # 其他运维脚本（如 stop_aerostack_tmux.sh）
 ├── README_NTP_INTEGRATION.md  # 本文档
+├── unused/                    # 旧脚本/历史实现/分析工具（不参与主流程）
 ├── venv/                      # Python虚拟环境 (setup.sh创建)
 ├── logs/                      # 测试日志目录 (自动创建)
-│   └── 20231211_153045/       # 每次运行自动创建的时间戳子目录 (示例)
+│   └── receiver_20231211_153045/ # 每次运行自动创建的子目录 (示例，sender/receiver 同理)
 │       ├── udp_test_20231211_153045.log
 │       ├── system_monitor_20231211_153045.jsonl
 │       ├── udp_receiver_20231211_153045.csv
 │       ├── gps_logger_drone9_20231211_153045.csv
 │       ├── nexfi_status_20231211_153045.csv
 │       └── typology_edges_20231211_153045.csv
-└── backups/                   # 备份目录 (自动创建)
 ```
 
 ## 环境要求
@@ -259,9 +257,10 @@ udp-latency/
 ```
 udp_test_with_ntp.py    # 主测试脚本
 start_test.sh           # 启动脚本
-udp_sender.py          # UDP发送端
-udp_receiver.py        # UDP接收端
-gps.py                 # GPS数据记录器
+udp_sender.py           # UDP发送端
+udp_receiver.py         # UDP接收端
+gps.py                  # GPS数据记录器（可选：启用 --enable-gps）
+nexfi_client.py         # Nexfi状态记录器（可选：启用 --enable-nexfi）
 ```
 
 ### 运行测试
@@ -431,8 +430,25 @@ source venv/bin/activate
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `--skip-ntp` | flag | false | 完全跳过NTP时间同步功能 |
-| `--ntp-peer-ip` | string | 使用--peer-ip的值 | NTP对时的对方IP地址 |
+| `--ntp-peer-ip` | string | 使用--peer-ip的值 | NTP对时链路的**对端**IP（见下方详细说明） |
 | `--skip-ntp-config` | flag | false | 跳过chrony配置，使用现有配置 |
+
+**`--ntp-peer-ip` 详细说明（很重要）**：
+- `receiver` 模式：它就是 **NTP Server 的地址**（也就是 sender 在 NTP 网段/网口上的 IP），chrony 会 `server <ntp-peer-ip> ...` 连接该地址完成对时。
+- `sender` 模式：它是 **NTP Client（对端无人机）的 IP**，主要用于：
+  - 生成 chrony 的 `allow <peer>/24` 放行网段（支持 NTP 与 UDP 分网段）
+  - 在 `chronyc clients` 输出里匹配该 IP，辅助判断“对端是否已连上”（仅用于验证，不影响 UDP 发送/接收）
+- 不传时默认等于 `--peer-ip`，等价于“UDP 与 NTP 走同一对等 IP”。
+
+**典型场景：UDP 数据网段与 NTP 管理网段分离**
+```bash
+# UDP: 192.168.104.x ；NTP: 192.168.1.x
+# sender（NTP server）：对端 NTP client 是 192.168.1.20
+./start_test.sh sender --local-ip=192.168.104.10 --peer-ip=192.168.104.20 --ntp-peer-ip=192.168.1.20
+
+# receiver（NTP client）：要连接的 NTP server 是 192.168.1.10
+./start_test.sh receiver --local-ip=192.168.104.20 --peer-ip=192.168.104.10 --ntp-peer-ip=192.168.1.10
+```
 
 ### 静态路由参数 🆕
 
@@ -495,12 +511,12 @@ sudo ip route add <peer-ip>/32 via <static-route-via> [dev <interface>]
 
 ## 日志文件说明
 
-每次执行 `udp_test_with_ntp.py` 时，都会在 `logs/` 目录下创建一个以 `YYYYMMDD_HHMMSS` 命名的子目录，本文称之为 `RUN_DIR`。所有本次实验产生的日志文件都会集中保存在该目录中，方便一次性复制与归档。
+每次执行 `udp_test_with_ntp.py` 时，都会在 `logs/` 目录下创建一个以 `<mode>_YYYYMMDD_HHMMSS` 命名的子目录（`mode` 为 `sender` 或 `receiver`），本文称之为 `RUN_DIR`。所有本次实验产生的日志文件都会集中保存在该目录中，方便一次性复制与归档。
 
 快速定位最新一次实验的目录：
 
 ```bash
-RUN_DIR=$(ls -td logs/*/ | head -1)
+RUN_DIR=$(ls -td logs/*_*/ | head -1)
 echo "当前分析目录: $RUN_DIR"
 ```
 
@@ -971,578 +987,44 @@ tail -f "$RUN_DIR"/gps_logger_drone0_*.csv
 
 # 验证GPS数据格式
 python3 -c "
-import os, glob
-import pandas as pd
+import csv
+import glob
+import os
 
-run_dir = os.environ.get('RUN_DIR') or sorted(glob.glob('logs/*/'))[-1]
+run_dir = os.environ.get('RUN_DIR') or sorted(glob.glob('logs/*_*/'), key=os.path.getmtime)[-1]
 gps_file = sorted(glob.glob(os.path.join(run_dir, 'gps_logger_drone0_*.csv')))[0]
-df = pd.read_csv(gps_file)
-print(df.head())
-print(f'GPS记录数: {len(df)}')
-print(f'有效GPS坐标数: {len(df[(df.latitude != 0) | (df.longitude != 0)])}')
+with open(gps_file, newline='') as f:
+    reader = csv.DictReader(f)
+    fieldnames = reader.fieldnames or []
+    rows = list(reader)
+
+print(f'GPS文件: {gps_file}')
+print(f'字段: {fieldnames}')
+print(f'GPS记录数: {len(rows)}')
+
+valid = 0
+for r in rows:
+    try:
+        lat = float(r.get('latitude') or 0)
+        lon = float(r.get('longitude') or 0)
+    except ValueError:
+        continue
+    if lat != 0.0 or lon != 0.0:
+        valid += 1
+print(f'有效GPS坐标数: {valid}')
 "
-```
-
-## 性能优化建议
-
-### 网络优化
-1. **减少网络延迟**: 使用有线连接或高质量无线链路
-2. **QoS设置**: 为NTP和UDP测试流量设置优先级
-3. **MTU优化**: 确保数据包大小小于链路MTU
-
-### 系统优化
-1. **CPU调度**: 设置实时调度优先级
-2. **网络缓冲**: 调整网络缓冲区大小
-3. **时钟源**: 使用高质量的系统时钟
-
-### GPS记录优化
-1. **记录频率**: 根据需求调整GPS记录间隔
-2. **存储空间**: 确保有足够的磁盘空间存储GPS日志
-3. **ROS2性能**: 优化ROS2节点通信性能
-
-### 测试参数调优
-1. **发送频率**: 根据网络带宽调整发送频率
-2. **包大小**: 避免IP分片，保持包大小适中
-3. **测试时长**: 足够长的测试时间以获得统计意义
-
-## 数据分析建议
-
-### GPS轨迹分析
-```python
-import pandas as pd
-import matplotlib.pyplot as plt
-import os, glob
-
-run_dir = os.environ.get('RUN_DIR') or sorted(glob.glob('logs/*/'))[-1]
-gps_file = sorted(glob.glob(os.path.join(run_dir, 'gps_logger_drone0_*.csv')))[0]
-df = pd.read_csv(gps_file)
-
-# 绘制轨迹图
-plt.figure(figsize=(10, 8))
-plt.plot(df['longitude'], df['latitude'], 'b-', alpha=0.7)
-plt.scatter(df['longitude'].iloc[0], df['latitude'].iloc[0], c='green', s=100, label='起点')
-plt.scatter(df['longitude'].iloc[-1], df['latitude'].iloc[-1], c='red', s=100, label='终点')
-plt.xlabel('经度')
-plt.ylabel('纬度')
-plt.title('无人机飞行轨迹')
-plt.legend()
-plt.grid(True)
-plt.show()
-```
-
-### 通信质量分析
-```python
-# 结合GPS和UDP数据分析通信质量与位置的关系
-import os, glob
-run_dir = os.environ.get('RUN_DIR') or sorted(glob.glob('logs/*/'))[-1]
-gps_file = sorted(glob.glob(os.path.join(run_dir, 'gps_logger_drone0_*.csv')))[0]
-udp_file = sorted(glob.glob(os.path.join(run_dir, 'udp_receiver_*.csv')))[0]
-gps_df = pd.read_csv(gps_file)
-udp_df = pd.read_csv(udp_file)
-
-# 时间对齐和分析
-# ... 分析代码
-```
-
-### Nexfi通信状态分析
-```python
-import pandas as pd
-import matplotlib.pyplot as plt
-import os, glob
-
-run_dir = os.environ.get('RUN_DIR') or sorted(glob.glob('logs/*/'))[-1]
-nexfi_file = sorted(glob.glob(os.path.join(run_dir, 'nexfi_status_*.csv')))[0]
-nexfi_df = pd.read_csv(nexfi_file)
-
-# 绘制信号强度和信噪比变化
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
-
-# RSSI变化图
-ax1.plot(nexfi_df['timestamp'], nexfi_df['avg_rssi'], 'b-')
-ax1.set_ylabel('RSSI (dBm)')
-ax1.set_title('信号强度变化')
-ax1.grid(True)
-
-# SNR变化图
-ax2.plot(nexfi_df['timestamp'], nexfi_df['avg_snr'], 'g-')
-ax2.set_ylabel('SNR (dB)')
-ax2.set_xlabel('时间戳')
-ax2.set_title('信噪比变化')
-ax2.grid(True)
-
-plt.tight_layout()
-plt.show()
-
-# 分析连接稳定性
-print(f"平均连接节点数: {nexfi_df['connected_nodes'].mean():.2f}")
-print(f"平均RSSI: {nexfi_df['avg_rssi'].mean():.2f} dBm")
-print(f"平均SNR: {nexfi_df['avg_snr'].mean():.2f} dB")
-print(f"平均链路质量: {nexfi_df['link_quality'].mean():.2f}")
-```
-
-### 综合分析示例
-```python
-# 结合UDP延迟、GPS位置和Nexfi状态进行综合分析
-import pandas as pd
-import numpy as np
-
-# 读取所有数据
-import os, glob
-run_dir = os.environ.get('RUN_DIR') or sorted(glob.glob('logs/*/'))[-1]
-udp_file = sorted(glob.glob(os.path.join(run_dir, 'udp_receiver_*.csv')))[0]
-gps_file = sorted(glob.glob(os.path.join(run_dir, 'gps_logger_*.csv')))[0]
-nexfi_file = sorted(glob.glob(os.path.join(run_dir, 'nexfi_status_*.csv')))[0]
-udp_df = pd.read_csv(udp_file)
-gps_df = pd.read_csv(gps_file)
-nexfi_df = pd.read_csv(nexfi_file)
-
-# 时间对齐（使用最近邻匹配）
-def align_data(df1, df2, time_col='timestamp'):
-    merged = pd.merge_asof(
-        df1.sort_values(time_col),
-        df2.sort_values(time_col),
-        on=time_col,
-        direction='nearest',
-        tolerance=1.0  # 1秒容差
-    )
-    return merged
-
-# 合并数据
-combined = align_data(udp_df, gps_df)
-combined = align_data(combined, nexfi_df)
-
-# 分析延迟与信号质量的关系
-correlation = combined[['delay', 'avg_rssi', 'avg_snr']].corr()
-print("延迟与信号质量相关性:")
-print(correlation)
 ```
 
 ## 注意事项
 
-1. **sudo权限**: 配置NTP需要sudo权限（使用--skip-ntp时不需要）🆕
-2. **网络稳定**: 确保测试期间网络连接稳定
-3. **时间同步**: 测试前确保时间同步成功（启用NTP时）🆕
-4. **时间配置**: --time参数是UDP通信时间，接收端会自动增加缓冲时间 🆕
-5. **启动时机**: 建议两端尽量同时启动，避免过大的时间差 🆕
-6. **防火墙**: 确保相关端口未被防火墙阻止
-7. **系统负载**: 避免在高负载时进行测试
-8. **ROS2环境**: GPS记录需要正确配置的ROS2环境
-9. **GPS信号**: 确保GPS信号良好，特别是在室外环境
-10. **存储空间**: 确保有足够空间存储日志文件
-11. **Nexfi设备**: 确保Nexfi设备正常工作并可访问
-12. **网络权限**: Nexfi API访问需要正确的用户名和密码
-13. **多网卡环境**: 使用--ntp-peer-ip时确保NTP网络路由正确 🆕
-14. **测试时长**: 长时间测试(>10分钟)建议监控系统资源使用情况 🆕
-15. **数据完整性**: 检查日志文件确保接收端接收到完整的数据包 🆕
-
-## 新功能测试示例 🆕
-
-### 测试场景1: 时间配置验证 🆕
-
-**目标**: 验证新的时间配置逻辑是否正确工作
-
-```bash
-# 短时间测试 (60秒)
-./start_test.sh sender --time=60 > sender_60s.log 2>&1 &
-./start_test.sh receiver --time=60 > receiver_60s.log 2>&1
-
-# 检查实际运行时间
-grep "总运行时间" sender_60s.log receiver_60s.log
-grep "UDP通信时间" sender_60s.log receiver_60s.log
-grep "缓冲时间" receiver_60s.log
-
-# 长时间测试 (300秒)
-./start_test.sh sender --time=300 > sender_300s.log 2>&1 &
-./start_test.sh receiver --time=300 > receiver_300s.log 2>&1
-
-# 验证接收端是否有足够的缓冲时间
-grep "缓冲时间" receiver_300s.log  # 应该显示60秒缓冲时间
-```
-
-**预期结果**:
-- 发送端: 准备~60s + UDP发送60s = 总计~120s
-- 接收端: 准备~60s + UDP接收60s + 缓冲60s = 总计~180s
-- 接收端应该能完整接收所有数据包
-
-### 测试场景2: 跳过NTP对时的快速UDP测试
-
-**适用情况**: 系统已有其他时间同步机制，或只需测试UDP性能
-
-```bash
-# 无人机A - 发送端
-source venv/bin/activate
-./start_test.sh sender --skip-ntp --time=120 --frequency=20 --packet-size=1400
-
-# 无人机B - 接收端
-source venv/bin/activate
-./start_test.sh receiver --skip-ntp --time=120
-```
-
-**预期结果**: 
-- 跳过所有NTP配置步骤
-- 发送端: 准备~20s + UDP发送120s = 总计~140s
-- 接收端: 准备~20s + UDP接收120s + 缓冲60s = 总计~200s
-- 系统监控日志中 `ntp_enabled` 为 `false`
-
-### 测试场景3: 双网卡环境（管理网络+数据网络）
-
-**网络配置**:
-- 管理网络: 192.168.1.x (用于NTP时间同步)
-- 数据网络: 192.168.104.x (用于UDP通信)
-
-```bash
-# 无人机A - 发送端
-source venv/bin/activate
-./start_test.sh sender \
-  --local-ip=192.168.104.10 \
-  --peer-ip=192.168.104.20 \
-  --ntp-peer-ip=192.168.1.20 \
-  --time=300
-
-# 无人机B - 接收端
-source venv/bin/activate
-./start_test.sh receiver \
-  --local-ip=192.168.104.20 \
-  --peer-ip=192.168.104.10 \
-  --ntp-peer-ip=192.168.1.10 \
-  --time=300
-```
-
-**预期结果**:
-- NTP同步通过192.168.1.x网络
-- UDP通信通过192.168.104.x网络
-- 发送端: 准备~60s + UDP发送300s = 总计~360s
-- 接收端: 准备~60s + UDP接收300s + 缓冲60s = 总计~420s
-- 两个网络可以独立优化和管理
-
-### 测试场景4: 验证NTP参数功能
-
-**步骤1**: 运行标准NTP同步测试
-```bash
-# 记录标准模式的时间偏移量
-./start_test.sh sender --time=60 > standard_ntp.log 2>&1
-```
-
-**步骤2**: 运行跳过NTP的测试
-```bash
-# 记录跳过NTP模式的性能
-./start_test.sh sender --skip-ntp --time=60 > skip_ntp.log 2>&1
-```
-
-**步骤3**: 比较结果
-```bash
-# 查看NTP状态差异
-grep "NTP" standard_ntp.log skip_ntp.log
-grep "跳过" standard_ntp.log skip_ntp.log
-
-# 检查时间配置差异
-grep "准备时间" standard_ntp.log skip_ntp.log
-grep "UDP通信时间" standard_ntp.log skip_ntp.log
-
-# 检查系统监控日志差异
-tail -5 $(ls -t "$RUN_DIR"/system_monitor_*.jsonl | head -1) | jq '.ntp_enabled'
-```
-
-### 测试场景5: 故障排除模式
-
-**模拟网络问题时的测试**:
-```bash
-# 在网络不稳定时使用跳过NTP模式继续测试
-./start_test.sh sender --skip-ntp --enable-gps --time=180
-
-# 或者使用备用网络进行NTP同步
-./start_test.sh sender \
-  --peer-ip=192.168.104.20 \
-  --ntp-peer-ip=10.0.0.20 \
-  --time=180
-```
-
-### 验证新功能的检查清单
-
-#### ✅ 测试新的时间配置逻辑 🆕
-- [ ] 确认--time参数表示UDP通信时间
-- [ ] 确认接收端自动增加缓冲时间
-- [ ] 确认GPS/Nexfi记录器运行时间自动计算
-- [ ] 确认程序显示详细的时间分解信息
-- [ ] 确认接收端能完整接收所有数据包
-
-#### ✅ 测试 `--skip-ntp` 参数
-- [ ] 确认跳过了所有NTP配置步骤
-- [ ] 确认系统监控日志中 `ntp_enabled` 为 `false`
-- [ ] 确认UDP测试正常进行
-- [ ] 确认不需要sudo权限
-
-#### ✅ 测试 `--ntp-peer-ip` 参数
-- [ ] 确认NTP同步使用指定的IP地址
-- [ ] 确认UDP通信使用不同的IP地址
-- [ ] 确认时间同步成功
-- [ ] 确认网络流量分离
-
-#### ✅ 测试向下兼容性
-- [ ] 确认不使用新参数时行为不变
-- [ ] 确认现有脚本和配置文件仍然工作
-- [ ] 确认日志格式向下兼容
-
-#### ✅ 测试错误处理
-- [ ] 测试NTP网络不可达时的行为
-- [ ] 测试无效IP地址的处理
-- [ ] 测试参数冲突的处理
-
-### 快速功能验证脚本
-
-创建一个快速验证脚本 `test_new_features.sh`:
-
-```bash
-#!/bin/bash
-echo "=== 测试新时间配置和NTP功能 ==="
-
-echo "1. 测试时间配置逻辑..."
-timeout 90 ./start_test.sh sender --time=30 > time_test.log 2>&1 &
-SENDER_PID=$!
-sleep 5
-timeout 120 ./start_test.sh receiver --time=30 > receiver_time_test.log 2>&1 &
-RECEIVER_PID=$!
-
-wait $SENDER_PID $RECEIVER_PID
-
-# 检查时间配置
-if grep -q "UDP通信时间: 30秒" time_test.log && grep -q "缓冲时间:" receiver_time_test.log; then
-    echo "✓ 时间配置逻辑正确"
-else
-    echo "✗ 时间配置逻辑有问题"
-fi
-
-echo "2. 测试跳过NTP功能..."
-timeout 60 ./start_test.sh sender --skip-ntp --time=20 > skip_ntp_test.log 2>&1 &
-wait
-if grep -q "跳过时间同步" skip_ntp_test.log; then
-    echo "✓ 跳过NTP功能正常"
-else
-    echo "✗ 跳过NTP功能有问题"
-fi
-
-echo "3. 测试独立NTP IP功能..."
-timeout 90 ./start_test.sh sender --ntp-peer-ip=192.168.1.20 --time=20 > ntp_ip_test.log 2>&1 &
-wait
-if grep -q "NTP对时专用IP" ntp_ip_test.log || grep -q "192.168.1.20" ntp_ip_test.log; then
-    echo "✓ 独立NTP IP功能正常"
-else
-    echo "✗ 独立NTP IP功能有问题"
-fi
-
-echo "4. 检查系统监控日志..."
-latest_run=$(ls -td logs/*/ 2>/dev/null | head -1)
-if [ -n "$latest_run" ]; then
-    latest_monitor=$(ls -t "${latest_run}"/system_monitor_*.jsonl 2>/dev/null | head -1)
-else
-    latest_monitor=""
-fi
-if [ -n "$latest_monitor" ]; then
-    echo "最新监控记录:"
-    tail -1 "$latest_monitor" | jq '.'
-    echo "✓ 监控日志格式正确"
-else
-    echo "⚠ 监控日志文件未找到"
-fi
-
-echo "=== 测试完成 ==="
-echo "详细日志文件："
-ls -la *test.log
-```
-
-## 技术支持
-
-如果遇到问题，请检查以下日志文件：
-- 系统日志: `/var/log/syslog`
-- Chrony日志: `/var/log/chrony/`
-- 测试日志: `./logs/<timestamp>/`
-- ROS2日志: `~/.ros/log/`
-
-对于新功能相关的问题：
-- NTP跳过功能: 检查 `RUN_DIR/system_monitor_*.jsonl` 中的 `ntp_enabled` 字段
-- 独立NTP IP: 检查网络路由和连通性
-- 参数兼容性: 查看详细的错误日志
-
-或者联系技术支持团队。
-
-## 时间配置最佳实践 🆕
-
-### 时间参数规划指南
-
-#### 短时间测试 (< 2分钟)
-```bash
-# 适用于快速验证或调试
-./start_test.sh sender --time=60    # 发送端: ~120s总时间
-./start_test.sh receiver --time=60  # 接收端: ~180s总时间
-```
-- 缓冲时间: 60秒 (固定最小值)
-- 适用场景: 功能验证、参数调试、快速测试
-
-#### 中等时间测试 (2-10分钟)
-```bash
-# 适用于性能测试
-./start_test.sh sender --time=300   # 发送端: ~360s总时间
-./start_test.sh receiver --time=300 # 接收端: ~420s总时间
-```
-- 缓冲时间: 60秒 (20% = 60s)
-- 适用场景: 性能评估、稳定性测试、数据收集
-
-#### 长时间测试 (> 10分钟)
-```bash
-# 适用于压力测试和长期稳定性验证
-./start_test.sh sender --time=1800   # 发送端: ~1860s总时间
-./start_test.sh receiver --time=1800 # 接收端: ~2220s总时间
-```
-- 缓冲时间: 360秒 (20% = 360s)
-- 适用场景: 压力测试、长期稳定性、生产环境验证
-
-### 时间配置常见问题
-
-#### 问题1: 接收端提前关闭
-
-**症状**: 
-```
-接收端日志显示: "UDP receiver completed"
-发送端仍在运行，但接收端已停止
-数据包丢失率异常高
-```
-
-**原因**: 
-- 接收端和发送端启动时间差异太大
-- 准备时间估算不准确
-- 网络延迟导致时间差
-
-**解决方案**:
-```bash
-# 方案1: 增加UDP通信时间
-./start_test.sh receiver --time=400  # 而不是300
-
-# 方案2: 手动同步启动
-# 在两台无人机上几乎同时执行命令
-
-# 方案3: 使用脚本自动化
-./synchronized_test.sh 300  # 自定义脚本处理同步
-```
-
-#### 问题2: GPS/Nexfi记录时间不够
-
-**症状**:
-```
-GPS记录器在UDP测试完成前就停止了
-Nexfi状态记录缺失测试后期数据
-```
-
-**解决方案**:
-程序已自动处理此问题：
-- GPS记录时间 = UDP时间 + 缓冲时间 + 120秒准备时间
-- Nexfi记录时间 = UDP时间 + 缓冲时间 + 120秒准备时间
-
-#### 问题3: 准备时间预估不准确
-
-**症状**:
-```
-实际准备时间超过预期
-NTP对时花费时间过长
-GPS启动缓慢
-```
-
-**监控和诊断**:
-```bash
-# 查看详细时间分解
-grep "准备时间" "$RUN_DIR"/udp_test_*.log
-grep "总运行时间" "$RUN_DIR"/udp_test_*.log
-
-# 检查各组件启动时间
-grep "NTP.*成功" "$RUN_DIR"/udp_test_*.log
-grep "GPS.*启动成功" "$RUN_DIR"/udp_test_*.log
-grep "Nexfi.*启动成功" "$RUN_DIR"/udp_test_*.log
-```
-
-### 自动化测试脚本建议
-
-#### 创建同步启动脚本
-
-`synchronized_test.sh`:
-```bash
-#!/bin/bash
-# 使用方法: ./synchronized_test.sh <mode> <time> [other_args]
-
-MODE=$1
-TIME=$2
-shift 2
-
-echo "=== 同步UDP测试启动 ==="
-echo "模式: $MODE"
-echo "UDP通信时间: ${TIME}秒"
-
-# 计算预期总时间
-if [[ "$MODE" == "sender" ]]; then
-    TOTAL_TIME=$((TIME + 80))  # 80秒准备时间预估
-else
-    BUFFER_TIME=$((TIME > 300 ? TIME / 5 : 60))
-    TOTAL_TIME=$((TIME + BUFFER_TIME + 80))
-fi
-
-echo "预计总时间: ${TOTAL_TIME}秒"
-echo "启动倒计时..."
-
-# 3秒倒计时
-for i in 3 2 1; do
-    echo "$i..."
-    sleep 1
-done
-
-echo "启动!"
-./start_test.sh $MODE --time=$TIME "$@"
-```
-
-#### 批量测试脚本
-
-`batch_test.sh`:
-```bash
-#!/bin/bash
-# 批量测试不同时间配置
-
-TEST_TIMES=(60 300 600 1200)
-
-for time in "${TEST_TIMES[@]}"; do
-    echo "=== 测试 ${time}秒 UDP通信 ==="
-    
-    # 创建测试目录
-    mkdir -p "test_results/${time}s"
-    
-    # 运行测试
-    ./start_test.sh $1 --time=$time --log-path="test_results/${time}s" || {
-        echo "测试失败: ${time}秒"
-        continue
-    }
-    
-    # 分析结果
-    echo "测试完成: ${time}秒"
-    if [ -f "test_results/${time}s/udp_receiver_*.csv" ]; then
-        PACKET_COUNT=$(tail -n +2 "test_results/${time}s/udp_receiver_*.csv" | wc -l)
-        echo "接收数据包数: $PACKET_COUNT"
-    fi
-    
-    sleep 10  # 间隔时间
-done
-```
-
-### 性能调优建议
-
-#### 网络环境优化
-- **有线连接**: 使用有线网络可减少准备时间和提高稳定性
-- **网络延迟**: 高延迟网络需要增加更多缓冲时间
-- **带宽限制**: 低带宽环境建议降低发送频率或包大小
-
-#### 系统资源优化
-- **CPU负载**: 高CPU使用率会影响时间精度，建议关闭不必要服务
-- **内存使用**: 确保有足够内存避免swap影响性能
-- **磁盘I/O**: 使用SSD可提高日志写入性能
-
-#### 时间同步优化
-- **本地时钟**: 使用高精度时钟源
-- **NTP配置**: 优化chrony配置参数
-- **网络路径**: NTP流量使用专用网络路径
-
-## 时间同步机制 
+- 默认启用 NTP 对时，通常需要 `sudo` 权限；只测纯 UDP 可使用 `--skip-ntp`。
+- `--time` 表示“实际 UDP 通信时间”；接收端会自动增加缓冲时间以尽量完整接收。
+- 建议两端尽量同步启动；现场推荐使用 `scripts/run_drone*_tmux.sh` 保持进程不随 SSH 断开而中止。
+- GPS 记录依赖 ROS2 + `as2_python_api`；未就绪时不要启用 `--enable-gps`。
+- Nexfi 记录依赖 `requests` 且需能访问 Nexfi 设备；不可达时会跳过或退出记录器，不影响核心 UDP 测试。
+
+## 维护说明
+
+- 本文档以当前主流程为准：`start_test.sh` → `udp_test_with_ntp.py` → `udp_sender.py/udp_receiver.py`；GPS/Nexfi 为可选组件。
+- `unused/` 仅用于存放历史脚本（含旧的数据处理/分析），不参与主流程，也不保证持续可用。
+- `check_environment.sh` 支持 `EXPECTED_LAN_PREFIX` 与 `NEXFI_IP` 覆盖默认检查网段/设备 IP，便于现场多网段部署。
