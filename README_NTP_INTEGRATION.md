@@ -596,74 +596,139 @@ timestamp,mesh_enabled,channel,node_id,node_ip,wifi_quality,wifi_noise,connected
 
 > **2025-12 更新**：`gps.py` 现在会自动订阅 Aerostack2/PSDK 的姿态、速度、GNSS、RTK、控制、电源、避障等 40+ 个话题，一并写入 `gps_logger_*.csv`。无需改系统包，只要按照下方环境要求运行即可获得完整的无人机状态快照。
 
-### GPS数据字段说明（按类别划分）
+### GPS CSV 字段表（完整）
 
-**核心位姿与状态**
+> 下表字段与 `gps.py` 写入的 `gps_logger_*.csv` 表头一致（顺序一致），共 **127** 列。部分字段单位由 Aerostack2/PSDK 上游定义，建议以实际输出/上游消息定义为准。
 
-| 字段名 | 类型 | 说明 |
-|--------|------|------|
-| timestamp | float | Unix时间戳 |
-| latitude / longitude / altitude | float | GNSS原始坐标 (deg/m) |
-| local_x / local_y / local_z | float | Aerostack本地坐标 (m) |
-| connected / armed / offboard | bool | 平台连接、解锁、Offboard 状态 |
-| linear_vx / vy / vz | float | `DroneInterface` 线速度 (m/s) |
-| angular_vx / vy / vz | float | `psdk_ros2/angular_rate_ground_fused` 角速度 (rad/s) |
-| roll / pitch / yaw | float | 欧拉角 (rad) |
-| psdk_vel_x / y / z | float | PSDK Ground Fused 速度 (m/s) |
-| psdk_acc_ground_x / y / z | float | 地理系线加速度 (m/s²) |
-| psdk_acc_body_raw_* / psdk_acc_body_fused_* | float | 机体系原始/融合加速度 |
-| psdk_ang_rate_body_* | float | 机体系角速度 |
-| psdk_att_qx / qy / qz / qw | float | PSDK 姿态四元数 |
-| height_above_ground | float | 距地高度 (m) |
-| altitude_barometric / altitude_sea_level | float | 气压/海平面高度 (m) |
-| position_fused_* | float | PSDK ENU 位置 |
-| position_fused_health_* | uint8 | 各轴健康度 |
-| mag_field_x / y / z | float | 磁场 (µT) |
-
-**GNSS / RTK 字段**
-
-| 字段名 | 类型 | 说明 |
-|--------|------|------|
-| gps_nav_lat / lon / alt | float | `psdk_ros2/gps_position` 经纬高 |
-| gps_nav_vel_x / y / z | float | `psdk_ros2/gps_velocity` 速度 |
-| gps_fix_state | float | `GPSDetails.fix_state` (0~5) |
-| gps_horizontal_dop / position_dop | float | DOP 指标 |
-| gps_vertical_accuracy / horizontal_accuracy | float | 精度 (mm) |
-| gps_speed_accuracy | float | 速度精度 (cm/s) |
-| gps_satellites_gps / glonass / total | uint | 使用的卫星数量 |
-| gps_counter | uint | PSDK GPS数据计数 |
-| gps_signal_level | uint8 | 信号等级 (0~5) |
-| home_point_lat / lon / alt | float | 返航点坐标 |
-| home_point_status | bool | 返航点是否锁定 |
-| home_point_altitude | float | 返航点高度 (m) |
-| rtk_lat / lon / alt | float | RTK 坐标 |
-| rtk_vel_x / y / z | float | RTK 速度 |
-| rtk_connection_status | uint16 | RTK 链路状态 |
-| rtk_yaw | uint16 | RTK Yaw (deg) |
-
-**控制与姿态状态**
-
-| 字段名 | 类型 | 说明 |
-|--------|------|------|
-| platform_state / yaw_mode / control_mode / reference_frame | int | `platform/info` 中的状态机与控制模式 |
-| display_mode | uint8 | PSDK 显示模式 (DJI Flight Mode) |
-| psdk_control_mode / device_mode / control_auth | uint8 | `psdk_ros2/control_mode` |
-| flight_status | uint8 | 起降状态 (0停、1地面、2空中) |
-| flight_anomaly_flags | str | 将 `psdk_ros2/flight_anomaly` 中为 1 的字段用 `|` 拼接（无异常时为 `none`） |
-| rc_axis_0~3 | float | 摇杆 XYZ/Yaw 输入 |
-| rc_button_0~1 | int | 常用按键值 |
-| rc_air_connection / ground_connection / app_connection / rc_link_disconnected | uint8 | 遥控链路状态 |
-
-**电源 / ESC / 避障 / HMS**
-
-| 字段名 | 类型 | 说明 |
-|--------|------|------|
-| battery1_* / battery2_* | float | 两块电池的电压、电流、剩余容量、百分比、温度 |
-| esc_avg_current / voltage / temperature | float | 所有电调平均电参 |
-| esc_max_temperature | float | 电调最高温 (℃) |
-| relative_obstacle_up / down / front / back / left / right | float | 各方向避障距离 (m) |
-| relative_obstacle_*_health | uint8 | 避障传感器健康度 |
-| hms_error_summary | str | `psdk_ros2/hms_info_table` 中存在错误码的 `error_code:error_level` 列表 |
+| 序号 | 字段名 | 说明 |
+|---:|---|---|
+| 1 | `timestamp` | Unix 时间戳（秒） |
+| 2 | `latitude` | GNSS 坐标（deg） |
+| 3 | `longitude` | GNSS 坐标（deg） |
+| 4 | `altitude` | GNSS 高度（m） |
+| 5 | `local_x` | Aerostack 本地坐标 X（m） |
+| 6 | `local_y` | Aerostack 本地坐标 Y（m） |
+| 7 | `local_z` | Aerostack 本地坐标 Z（m） |
+| 8 | `connected` | 飞控/平台状态 |
+| 9 | `armed` | 飞控/平台状态 |
+| 10 | `offboard` | 飞控/平台状态 |
+| 11 | `linear_vx` | 线速度（m/s） |
+| 12 | `linear_vy` | 线速度（m/s） |
+| 13 | `linear_vz` | 线速度（m/s） |
+| 14 | `angular_vx` | 角速度（rad/s） |
+| 15 | `angular_vy` | 角速度（rad/s） |
+| 16 | `angular_vz` | 角速度（rad/s） |
+| 17 | `roll` | 姿态欧拉角（rad） |
+| 18 | `pitch` | 姿态欧拉角（rad） |
+| 19 | `yaw` | 姿态欧拉角（rad） |
+| 20 | `psdk_vel_x` | PSDK 速度（m/s） |
+| 21 | `psdk_vel_y` | PSDK 速度（m/s） |
+| 22 | `psdk_vel_z` | PSDK 速度（m/s） |
+| 23 | `psdk_acc_ground_x` | PSDK 地理系加速度（m/s²） |
+| 24 | `psdk_acc_ground_y` | PSDK 地理系加速度（m/s²） |
+| 25 | `psdk_acc_ground_z` | PSDK 地理系加速度（m/s²） |
+| 26 | `psdk_acc_body_raw_x` | PSDK 机体系原始加速度（m/s²） |
+| 27 | `psdk_acc_body_raw_y` | PSDK 机体系原始加速度（m/s²） |
+| 28 | `psdk_acc_body_raw_z` | PSDK 机体系原始加速度（m/s²） |
+| 29 | `psdk_acc_body_fused_x` | PSDK 机体系融合加速度（m/s²） |
+| 30 | `psdk_acc_body_fused_y` | PSDK 机体系融合加速度（m/s²） |
+| 31 | `psdk_acc_body_fused_z` | PSDK 机体系融合加速度（m/s²） |
+| 32 | `psdk_ang_rate_body_x` | PSDK 机体系角速度（rad/s） |
+| 33 | `psdk_ang_rate_body_y` | PSDK 机体系角速度（rad/s） |
+| 34 | `psdk_ang_rate_body_z` | PSDK 机体系角速度（rad/s） |
+| 35 | `psdk_att_qx` | PSDK 姿态四元数 |
+| 36 | `psdk_att_qy` | PSDK 姿态四元数 |
+| 37 | `psdk_att_qz` | PSDK 姿态四元数 |
+| 38 | `psdk_att_qw` | PSDK 姿态四元数 |
+| 39 | `height_above_ground` | 距地高度 AGL（m） |
+| 40 | `altitude_barometric` | 高度（m） |
+| 41 | `altitude_sea_level` | 高度（m） |
+| 42 | `position_fused_x` | PSDK 融合位置（m） |
+| 43 | `position_fused_y` | PSDK 融合位置（m） |
+| 44 | `position_fused_z` | PSDK 融合位置（m） |
+| 45 | `position_fused_health_x` | PSDK 融合位置健康度 |
+| 46 | `position_fused_health_y` | PSDK 融合位置健康度 |
+| 47 | `position_fused_health_z` | PSDK 融合位置健康度 |
+| 48 | `mag_field_x` | 磁场（μT） |
+| 49 | `mag_field_y` | 磁场（μT） |
+| 50 | `mag_field_z` | 磁场（μT） |
+| 51 | `gps_nav_lat` | PSDK GNSS 坐标（deg） |
+| 52 | `gps_nav_lon` | PSDK GNSS 坐标（deg） |
+| 53 | `gps_nav_alt` | PSDK GNSS 高度（m） |
+| 54 | `gps_nav_vel_x` | PSDK GNSS 速度（m/s） |
+| 55 | `gps_nav_vel_y` | PSDK GNSS 速度（m/s） |
+| 56 | `gps_nav_vel_z` | PSDK GNSS 速度（m/s） |
+| 57 | `gps_fix_state` | GNSS fix 状态 |
+| 58 | `gps_horizontal_dop` | DOP 指标 |
+| 59 | `gps_position_dop` | DOP 指标 |
+| 60 | `gps_vertical_accuracy` | 定位精度（单位取决于 PSDK 输出） |
+| 61 | `gps_horizontal_accuracy` | 定位精度（单位取决于 PSDK 输出） |
+| 62 | `gps_speed_accuracy` | 速度精度（单位取决于 PSDK 输出） |
+| 63 | `gps_satellites_gps` | 卫星数量 |
+| 64 | `gps_satellites_glonass` | 卫星数量 |
+| 65 | `gps_satellites_total` | 卫星数量 |
+| 66 | `gps_counter` | GPS 数据计数 |
+| 67 | `gps_signal_level` | 信号等级 |
+| 68 | `home_point_lat` | Home 点信息 |
+| 69 | `home_point_lon` | Home 点信息 |
+| 70 | `home_point_alt` | Home 点信息 |
+| 71 | `home_point_status` | Home 点信息 |
+| 72 | `home_point_altitude` | Home 点信息 |
+| 73 | `rtk_lat` | RTK 坐标（deg） |
+| 74 | `rtk_lon` | RTK 坐标（deg） |
+| 75 | `rtk_alt` | RTK 高度（m） |
+| 76 | `rtk_vel_x` | RTK 速度（m/s） |
+| 77 | `rtk_vel_y` | RTK 速度（m/s） |
+| 78 | `rtk_vel_z` | RTK 速度（m/s） |
+| 79 | `rtk_connection_status` | RTK 链路状态 |
+| 80 | `rtk_yaw` | RTK Yaw |
+| 81 | `platform_state` | Aerostack 平台状态/模式 |
+| 82 | `platform_yaw_mode` | Aerostack 平台状态/模式 |
+| 83 | `platform_control_mode` | Aerostack 平台状态/模式 |
+| 84 | `platform_reference_frame` | Aerostack 平台状态/模式 |
+| 85 | `display_mode` | DJI DisplayMode |
+| 86 | `psdk_control_mode` | PSDK 控制信息 |
+| 87 | `psdk_device_mode` | PSDK 控制信息 |
+| 88 | `psdk_control_auth` | PSDK 控制信息 |
+| 89 | `flight_status` | 飞行状态/异常 |
+| 90 | `flight_anomaly_flags` | 飞行状态/异常 |
+| 91 | `rc_axis_0` | 遥控器摇杆输入 |
+| 92 | `rc_axis_1` | 遥控器摇杆输入 |
+| 93 | `rc_axis_2` | 遥控器摇杆输入 |
+| 94 | `rc_axis_3` | 遥控器摇杆输入 |
+| 95 | `rc_button_0` | 遥控器按键 |
+| 96 | `rc_button_1` | 遥控器按键 |
+| 97 | `rc_air_connection` | 遥控器链路状态 |
+| 98 | `rc_ground_connection` | 遥控器链路状态 |
+| 99 | `rc_app_connection` | 遥控器链路状态 |
+| 100 | `rc_link_disconnected` | 遥控器链路状态 |
+| 101 | `battery1_voltage` | 电池1 |
+| 102 | `battery1_current` | 电池1 |
+| 103 | `battery1_capacity_remain` | 电池1 |
+| 104 | `battery1_capacity_pct` | 电池1 |
+| 105 | `battery1_temperature` | 电池1 |
+| 106 | `battery2_voltage` | 电池2 |
+| 107 | `battery2_current` | 电池2 |
+| 108 | `battery2_capacity_remain` | 电池2 |
+| 109 | `battery2_capacity_pct` | 电池2 |
+| 110 | `battery2_temperature` | 电池2 |
+| 111 | `esc_avg_current` | ESC 统计 |
+| 112 | `esc_avg_voltage` | ESC 统计 |
+| 113 | `esc_avg_temperature` | ESC 统计 |
+| 114 | `esc_max_temperature` | ESC 统计 |
+| 115 | `relative_obstacle_up` | 避障距离（m） |
+| 116 | `relative_obstacle_down` | 避障距离（m） |
+| 117 | `relative_obstacle_front` | 避障距离（m） |
+| 118 | `relative_obstacle_back` | 避障距离（m） |
+| 119 | `relative_obstacle_left` | 避障距离（m） |
+| 120 | `relative_obstacle_right` | 避障距离（m） |
+| 121 | `relative_obstacle_up_health` | 避障健康度 |
+| 122 | `relative_obstacle_down_health` | 避障健康度 |
+| 123 | `relative_obstacle_front_health` | 避障健康度 |
+| 124 | `relative_obstacle_back_health` | 避障健康度 |
+| 125 | `relative_obstacle_left_health` | 避障健康度 |
+| 126 | `relative_obstacle_right_health` | 避障健康度 |
+| 127 | `hms_error_summary` | HMS 错误摘要 |
 
 ### GPS记录器独立使用
 
