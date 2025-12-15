@@ -223,14 +223,54 @@ class NexfiClient:
             return None
 
         if isinstance(payload, list):
-            # ubus responses often look like [0, { ... }] ; iterate反向可直接拿到字典
+            # ubus responses typically look like: [status_code, payload]
+            # - status_code == 0: success
+            # - status_code != 0: error (payload may be a string/dict or absent)
+            if payload and isinstance(payload[0], int):
+                status_code = payload[0]
+                if status_code != 0:
+                    message: Optional[str] = None
+                    details: Optional[Any] = None
+                    if len(payload) >= 2:
+                        second = payload[1]
+                        if isinstance(second, str):
+                            message = second
+                        elif isinstance(second, dict):
+                            details = second
+                        elif second is not None:
+                            message = str(second)
+                    return {"__error__": {"code": status_code, "message": message, "details": details}}
+
+                if len(payload) == 1:
+                    return {}
+
+                data = payload[1]
+                if isinstance(data, dict):
+                    return self._normalize_response_payload(data)
+                if isinstance(data, list):
+                    return data
+                if isinstance(data, str):
+                    parsed = self._parse_json_string(data)
+                    if parsed is None:
+                        return {"data": data}
+                    if isinstance(parsed, (dict, list)):
+                        return parsed
+                    return {"data": parsed}
+                if data is None:
+                    return {}
+                return {"data": data}
+
+            # fallback: some firmwares may return non-standard list structures
+            # iterate反向可直接拿到字典/列表/可解析 JSON 字符串
             for item in reversed(payload):
                 if isinstance(item, dict):
                     return self._normalize_response_payload(item)
+                if isinstance(item, list):
+                    return item
                 if isinstance(item, str):
                     parsed = self._parse_json_string(item)
                     if parsed is not None:
-                        return parsed if isinstance(parsed, dict) else {"data": parsed}
+                        return parsed if isinstance(parsed, (dict, list)) else {"data": parsed}
             return None
 
         if isinstance(payload, dict):
@@ -305,7 +345,12 @@ class NexfiClient:
         device_used = None
         for dev in self._candidate_devices():
             response = self._make_request("iwinfo", "info", {"device": dev})
-            if response and not self._is_error_response(response):
+            if not isinstance(response, dict) or self._is_error_response(response):
+                continue
+            # iwinfo.info 正常应返回包含基本无线字段的字典
+            if not any(key in response for key in ("mode", "channel", "bssid", "quality", "quality_max")):
+                continue
+            if response:
                 wifi_info = response
                 device_used = dev
                 break
@@ -370,7 +415,7 @@ class NexfiClient:
     def _get_connected_nodes_fallback(self) -> List[Dict[str, Any]]:
         for dev in self._candidate_devices():
             response = self._make_request("iwinfo", "assoclist", {"device": dev})
-            if not response or self._is_error_response(response):
+            if not isinstance(response, dict) or not response or self._is_error_response(response):
                 continue
             result_list = response.get("results")
             if isinstance(result_list, list) and result_list:

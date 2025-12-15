@@ -45,17 +45,31 @@ class NTPSyncManager:
     def setup_logging(self):
         """设置日志配置"""
         os.makedirs(self.log_path, exist_ok=True)
-        log_file = os.path.join(self.log_path, f"ntp_sync_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
-        
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler(log_file),
-                logging.StreamHandler()
-            ]
+        log_file = os.path.join(
+            self.log_path, f"ntp_sync_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
         )
-        self.logger = logging.getLogger(__name__)
+
+        # 这里不能使用 logging.basicConfig：
+        # UDPTestManager 会先调用 basicConfig 完成全局日志配置，后续再次 basicConfig 会被忽略，
+        # 导致 ntp_sync_*.log 文件被创建但没有 handler 写入，表现为“日志一直为空”。
+        self.logger = logging.getLogger(f"{__name__}.NTPSyncManager")
+        self.logger.setLevel(logging.INFO)
+        self.logger.propagate = True  # 继续写入主日志(udp_test_*.log)与控制台
+
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
+        log_file_abs = os.path.abspath(log_file)
+        has_same_file_handler = any(
+            isinstance(handler, logging.FileHandler)
+            and os.path.abspath(getattr(handler, "baseFilename", "")) == log_file_abs
+            for handler in self.logger.handlers
+        )
+        if not has_same_file_handler:
+            file_handler = logging.FileHandler(log_file)
+            file_handler.setFormatter(formatter)
+            self.logger.addHandler(file_handler)
+
+        self.ntp_log_file = log_file
     
     def determine_role(self) -> str:
         """基于sender/receiver模式确定NTP角色"""

@@ -78,6 +78,11 @@ cd /home/amov/udp_test/udp-latency
      ./stop_aerostack_tmux.sh drone9
      ./stop_aerostack_tmux.sh drone9 drone12   # 同时停止多台
      ```  
+   - 如果希望同时结束 UDP tmux（如 `drone9_udp`），可加 `--kill-udp`：  
+     ```bash
+     ./stop_aerostack_tmux.sh --kill-udp drone9
+     ./stop_aerostack_tmux.sh --kill-udp drone9 drone12
+     ```  
    - 该脚本会调用 `~/aerostack2_ws/src/project_dji_psdk/stop_tmuxinator_as2.bash`，依次对目标 session 中的所有窗口发送 `Ctrl+C`，然后 kill session。  
    - 也可直接到 Aerostack2 工程目录执行原始脚本：  
      ```bash
