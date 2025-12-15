@@ -10,13 +10,14 @@ import requests
 import uuid
 import json
 import time
-import csv
 import signal
 import sys
 import os
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
 import logging
+
+from resilient_csv import ResilientCsvWriter
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -34,6 +35,75 @@ DEFAULT_CONFIG = {
     "device_name": "adhoc0",         # 网络设备名称
     "bat_interface": "bat0",        # batman-adv接口
 }
+
+NEXFI_STATUS_CSV_HEADER = [
+    'timestamp',           # 时间戳（Unix时间戳）
+    'mesh_enabled',        # Mesh是否启用
+    'channel',             # 信道号
+    'frequency_band',      # 频宽(MHz)
+    'tx_power',            # 发射功率(dBm)
+    'work_mode',           # 工作模式
+    'node_id',             # 节点ID
+    'node_ip',             # 节点IP
+    'wifi_quality',        # Wi-Fi质量
+    'wifi_quality_max',    # Wi-Fi质量上限
+    'wifi_noise',          # 噪声
+    'wifi_bitrate',        # 速率
+    'wifi_mode',           # Wi-Fi模式
+    'channel_width',       # 信道宽度
+    'connected_nodes',     # 连接的节点数量
+    'connected_node_id',   # 连接的节点ID
+    'connected_node_mac',  # 连接的节点MAC
+    'connected_node_ip',   # 连接的节点IP
+    'rssi',                # 平均信号强度(dBm)
+    'snr',                 # 信噪比
+    'topology_snr',        # 拓扑中的信噪比
+    'link_metric',         # 拓扑metric
+    'tx_rate',             # 拓扑速率
+    'last_seen',           # 最后可达
+    'thr',                 # 节点吞吐估计
+    'tx_packets',          # 发送包数
+    'tx_bytes',            # 发送字节
+    'tx_retries',          # 重传次数
+    'rx_packets',          # 接收包数
+    'rx_bytes',            # 接收字节
+    'rx_drop_misc',        # 接收丢弃
+    'mesh_plink',          # Mesh链路状态
+    'mesh_llid',           # Mesh LLID
+    'mesh_plid',           # Mesh PLID
+    'mesh_local_ps',       # 本地省电状态
+    'mesh_peer_ps',        # 对端省电状态
+    'mesh_non_peer_ps',    # 非对端省电状态
+    'throughput',          # 吞吐量(Mbps)
+    'cpu_usage',           # CPU使用率
+    'memory_usage',        # 内存使用率
+    'load1',               # 1分钟负载
+    'load5',               # 5分钟负载
+    'load15',              # 15分钟负载
+    'mem_total',           # 内存总量
+    'mem_free',            # 内存空闲
+    'mem_cached',          # 缓存
+    'bat_ipv4',            # bat接口IPv4
+    'bat_ipv6',            # bat接口IPv6
+    'uptime',              # 运行时间
+    'firmware_version',    # 固件版本
+    'topology_nodes',      # 拓扑中的节点数
+    'link_quality',        # 平均链路质量
+]
+
+NEXFI_TOPOLOGY_EDGES_CSV_HEADER = [
+    'timestamp',
+    'router_mac',
+    'router_ip',
+    'router_nodeid',
+    'neighbor_mac',
+    'neighbor_ip',
+    'neighbor_nodeid',
+    'metric',
+    'tx_rate',
+    'snr',
+    'last_seen'
+]
 
 
 class NexfiClient:
@@ -461,6 +531,30 @@ class NexfiStatusLogger:
         self.topology_edges_file = os.path.join(self.log_path, f"typology_edges_{timestamp}.csv")
         self.topology_edges_initialized = False
         self.topology_edges_disabled = False
+        self._status_csv = ResilientCsvWriter(
+            self.log_file,
+            header=NEXFI_STATUS_CSV_HEADER,
+            flush_every=10,
+            flush_interval_s=1.0,
+            inode_check_every=50,
+            inode_check_interval_s=1.0,
+            retry_base_interval_s=5.0,
+            retry_max_interval_s=60.0,
+            verbose=self.verbose,
+            label="NEXFI_STATUS",
+        )
+        self._topology_edges_csv = ResilientCsvWriter(
+            self.topology_edges_file,
+            header=NEXFI_TOPOLOGY_EDGES_CSV_HEADER,
+            flush_every=50,
+            flush_interval_s=1.0,
+            inode_check_every=200,
+            inode_check_interval_s=2.0,
+            retry_base_interval_s=5.0,
+            retry_max_interval_s=60.0,
+            verbose=self.verbose,
+            label="NEXFI_EDGES",
+        )
         
         # 创建Nexfi客户端
         if self.verbose:
@@ -500,95 +594,19 @@ class NexfiStatusLogger:
     
     def init_csv_file(self):
         """初始化CSV文件，写入表头（与UDP测试系统格式保持一致）"""
-        try:
-            with open(self.log_file, 'w', newline='') as csvfile:
-                writer = csv.writer(csvfile)
-                # 使用与UDP测试系统一致的列名格式
-                writer.writerow([
-                    'timestamp',           # 时间戳（Unix时间戳）
-                    'mesh_enabled',        # Mesh是否启用
-                    'channel',             # 信道号
-                    'frequency_band',      # 频宽(MHz)
-                    'tx_power',            # 发射功率(dBm)
-                    'work_mode',           # 工作模式
-                    'node_id',             # 节点ID
-                    'node_ip',             # 节点IP
-                    'wifi_quality',        # Wi-Fi质量
-                    'wifi_quality_max',    # Wi-Fi质量上限
-                    'wifi_noise',          # 噪声
-                    'wifi_bitrate',        # 速率
-                    'wifi_mode',           # Wi-Fi模式
-                    'channel_width',       # 信道宽度
-                    'connected_nodes',     # 连接的节点数量
-                    'connected_node_id',   # 连接的节点ID
-                    'connected_node_mac',  # 连接的节点MAC
-                    'connected_node_ip',   # 连接的节点IP
-                    'rssi',                # 平均信号强度(dBm)
-                    'snr',                 # 信噪比
-                    'topology_snr',        # 拓扑中的信噪比
-                    'link_metric',         # 拓扑metric
-                    'tx_rate',             # 拓扑速率
-                    'last_seen',           # 最后可达
-                    'thr',                 # 节点吞吐估计
-                    'tx_packets',          # 发送包数
-                    'tx_bytes',            # 发送字节
-                    'tx_retries',          # 重传次数
-                    'rx_packets',          # 接收包数
-                    'rx_bytes',            # 接收字节
-                    'rx_drop_misc',        # 接收丢弃
-                    'mesh_plink',          # Mesh链路状态
-                    'mesh_llid',           # Mesh LLID
-                    'mesh_plid',           # Mesh PLID
-                    'mesh_local_ps',       # 本地省电状态
-                    'mesh_peer_ps',        # 对端省电状态
-                    'mesh_non_peer_ps',    # 非对端省电状态
-                    'throughput',          # 吞吐量(Mbps)
-                    'cpu_usage',           # CPU使用率
-                    'memory_usage',        # 内存使用率
-                    'load1',               # 1分钟负载
-                    'load5',               # 5分钟负载
-                    'load15',              # 15分钟负载
-                    'mem_total',           # 内存总量
-                    'mem_free',            # 内存空闲
-                    'mem_cached',          # 缓存
-                    'bat_ipv4',            # bat接口IPv4
-                    'bat_ipv6',            # bat接口IPv6
-                    'uptime',              # 运行时间
-                    'firmware_version',    # 固件版本
-                    'topology_nodes',      # 拓扑中的节点数
-                    'link_quality',        # 平均链路质量
-                ])
+        if self._status_csv.ensure_open():
             if self.verbose:
                 print(f"Nexfi状态数据将记录到: {self.log_file}")
-        except Exception as e:
-            print(f"创建CSV文件时出错: {e}")
-            sys.exit(1)
+            return
+        print(f"创建CSV文件时出错: 无法打开 {self.log_file}，将在运行中自动重试")
 
     def init_topology_edges_file(self):
         """初始化拓扑边CSV文件"""
         if self.topology_edges_disabled:
             return
-        try:
-            with open(self.topology_edges_file, 'w', newline='') as csvfile:
-                writer = csv.writer(csvfile)
-                writer.writerow([
-                    'timestamp',
-                    'router_mac',
-                    'router_ip',
-                    'router_nodeid',
-                    'neighbor_mac',
-                    'neighbor_ip',
-                    'neighbor_nodeid',
-                    'metric',
-                    'tx_rate',
-                    'snr',
-                    'last_seen'
-                ])
-            self.topology_edges_initialized = True
-        except Exception as e:
-            print(f"创建拓扑边CSV文件时出错: {e}")
-            self.topology_edges_initialized = False
-            self.topology_edges_disabled = True
+        self.topology_edges_initialized = self._topology_edges_csv.ensure_open()
+        if not self.topology_edges_initialized and self.verbose:
+            print(f"创建拓扑边CSV文件失败: {self.topology_edges_file}，将在运行中自动重试")
     
     def process_nexfi_data(self) -> Dict[str, Any]:
         """处理Nexfi数据，提取关键指标"""
@@ -770,90 +788,49 @@ class NexfiStatusLogger:
             # 获取处理后的Nexfi数据
             data = self.process_nexfi_data()
             # 写入CSV文件，每个连接节点写一行
-            with open(self.log_file, 'a', newline='') as csvfile:
-                writer = csv.writer(csvfile)
-                if data['nodeinfo_list']:
-                    for node in data['nodeinfo_list']:
-                        writer.writerow([
-                            timestamp,                          # Unix时间戳
-                            data['mesh_enabled'],               # Mesh启用状态
-                            data['channel'],                    # 信道
-                            data['frequency_band'],             # 频宽
-                            data['tx_power'],                   # 发射功率
-                            data['work_mode'],                  # 工作模式
-                            data['node_id'],                    # 本节点ID
-                            data.get('node_ip', 'N/A'),        # 本节点IP
-                            data.get('wifi_quality', ''),
-                            data.get('wifi_quality_max', ''),
-                            data.get('wifi_noise', ''),
-                            data.get('wifi_bitrate', ''),
-                            data.get('wifi_mode', ''),
-                            data.get('channel_width', ''),
-                            data['connected_nodes'],            # 连接节点数
-                            node.get('nodeid', ''),            # 连接的节点ID
-                            node.get('macaddr', ''),           # 连接的节点MAC
-                            node.get('ipaddr', ''),            # 连接的节点IP
-                            node.get('rssi', ''),               # rssi
-                            node.get('snr', ''),                # snr
-                            node.get('topology_snr', ''),       # topo snr
-                            node.get('link_metric', ''),        # metric
-                            node.get('tx_rate', ''),            # tx rate
-                            node.get('last_seen', ''),          # last seen
-                            node.get('thr', ''),                # thr
-                            node.get('tx_packets', ''),
-                            node.get('tx_bytes', ''),
-                            node.get('tx_retries', ''),
-                            node.get('rx_packets', ''),
-                            node.get('rx_bytes', ''),
-                            node.get('rx_drop_misc', ''),
-                            node.get('mesh_plink', ''),
-                            node.get('mesh_llid', ''),
-                            node.get('mesh_plid', ''),
-                            node.get('mesh_local_ps', ''),
-                            node.get('mesh_peer_ps', ''),
-                            node.get('mesh_non_peer_ps', ''),
-                            data['throughput'],                 # 吞吐量
-                            data['cpu_usage'],                  # CPU使用率
-                            data['memory_usage'],               # 内存使用率
-                            data.get('load1', ''),
-                            data.get('load5', ''),
-                            data.get('load15', ''),
-                            data.get('mem_total', ''),
-                            data.get('mem_free', ''),
-                            data.get('mem_cached', ''),
-                            data.get('bat_ipv4', ''),
-                            data.get('bat_ipv6', ''),
-                            data['uptime'],                     # 运行时间
-                            data['firmware_version'],           # 固件版本
-                            data['topology_nodes'],             # 拓扑节点数
-                            data['link_quality']                # 链路质量
-                        ])
-                else:
-                    writer.writerow([
-                        timestamp,
-                        data['mesh_enabled'],
-                        data['channel'],
-                        data['frequency_band'],
-                        data['tx_power'],
-                        data['work_mode'],
-                        data['node_id'],
-                        data.get('node_ip', 'N/A'),
+            if data['nodeinfo_list']:
+                for node in data['nodeinfo_list']:
+                    self._status_csv.write_row([
+                        timestamp,                         # Unix时间戳
+                        data['mesh_enabled'],              # Mesh启用状态
+                        data['channel'],                   # 信道
+                        data['frequency_band'],            # 频宽
+                        data['tx_power'],                  # 发射功率
+                        data['work_mode'],                 # 工作模式
+                        data['node_id'],                   # 本节点ID
+                        data.get('node_ip', 'N/A'),        # 本节点IP
                         data.get('wifi_quality', ''),
                         data.get('wifi_quality_max', ''),
                         data.get('wifi_noise', ''),
                         data.get('wifi_bitrate', ''),
                         data.get('wifi_mode', ''),
                         data.get('channel_width', ''),
-                        data['connected_nodes'],
-                        '', '', '',
-                        '', '', '',
-                        '', '', '',
-                        '', '', '',
-                        '', '', '',
-                        '', '', '',
-                        data['throughput'],
-                        data['cpu_usage'],
-                        data['memory_usage'],
+                        data['connected_nodes'],           # 连接节点数
+                        node.get('nodeid', ''),            # 连接的节点ID
+                        node.get('macaddr', ''),           # 连接的节点MAC
+                        node.get('ipaddr', ''),            # 连接的节点IP
+                        node.get('rssi', ''),              # rssi
+                        node.get('snr', ''),               # snr
+                        node.get('topology_snr', ''),      # topo snr
+                        node.get('link_metric', ''),       # metric
+                        node.get('tx_rate', ''),           # tx rate
+                        node.get('last_seen', ''),         # last seen
+                        node.get('thr', ''),               # thr
+                        node.get('tx_packets', ''),
+                        node.get('tx_bytes', ''),
+                        node.get('tx_retries', ''),
+                        node.get('rx_packets', ''),
+                        node.get('rx_bytes', ''),
+                        node.get('rx_drop_misc', ''),
+                        node.get('mesh_plink', ''),
+                        node.get('mesh_llid', ''),
+                        node.get('mesh_plid', ''),
+                        node.get('mesh_local_ps', ''),
+                        node.get('mesh_peer_ps', ''),
+                        node.get('mesh_non_peer_ps', ''),
+                        data['throughput'],                # 吞吐量
+                        data['cpu_usage'],                 # CPU使用率
+                        data['memory_usage'],              # 内存使用率
                         data.get('load1', ''),
                         data.get('load5', ''),
                         data.get('load15', ''),
@@ -862,11 +839,50 @@ class NexfiStatusLogger:
                         data.get('mem_cached', ''),
                         data.get('bat_ipv4', ''),
                         data.get('bat_ipv6', ''),
-                        data['uptime'],
-                        data['firmware_version'],
-                        data['topology_nodes'],
-                        data['link_quality']
+                        data['uptime'],                    # 运行时间
+                        data['firmware_version'],          # 固件版本
+                        data['topology_nodes'],            # 拓扑节点数
+                        data['link_quality']               # 链路质量
                     ])
+            else:
+                self._status_csv.write_row([
+                    timestamp,
+                    data['mesh_enabled'],
+                    data['channel'],
+                    data['frequency_band'],
+                    data['tx_power'],
+                    data['work_mode'],
+                    data['node_id'],
+                    data.get('node_ip', 'N/A'),
+                    data.get('wifi_quality', ''),
+                    data.get('wifi_quality_max', ''),
+                    data.get('wifi_noise', ''),
+                    data.get('wifi_bitrate', ''),
+                    data.get('wifi_mode', ''),
+                    data.get('channel_width', ''),
+                    data['connected_nodes'],
+                    '', '', '',
+                    '', '', '',
+                    '', '', '',
+                    '', '', '',
+                    '', '', '',
+                    '', '', '',
+                    data['throughput'],
+                    data['cpu_usage'],
+                    data['memory_usage'],
+                    data.get('load1', ''),
+                    data.get('load5', ''),
+                    data.get('load15', ''),
+                    data.get('mem_total', ''),
+                    data.get('mem_free', ''),
+                    data.get('mem_cached', ''),
+                    data.get('bat_ipv4', ''),
+                    data.get('bat_ipv6', ''),
+                    data['uptime'],
+                    data['firmware_version'],
+                    data['topology_nodes'],
+                    data['link_quality']
+                ])
             # 写拓扑数据到json文件
             topology_snapshot = data.get('typology')
             if topology_snapshot:
@@ -904,31 +920,29 @@ class NexfiStatusLogger:
             nodes_by_mac[primary] = node
 
         try:
-            with open(self.topology_edges_file, 'a', newline='') as csvfile:
-                writer = csv.writer(csvfile)
-                for node in topology:
-                    router_mac = str(node.get('primary', '')).lower()
-                    router_ip = node.get('ipaddr', '')
-                    router_nodeid = node.get('nodeid', '')
-                    neighbors = node.get('neighbors', [])
-                    if not isinstance(neighbors, list):
-                        continue
-                    for neighbor in neighbors:
-                        neighbor_mac = str(neighbor.get('neighbor', '')).lower()
-                        neighbor_entry = nodes_by_mac.get(neighbor_mac, {})
-                        writer.writerow([
-                            timestamp,
-                            router_mac,
-                            router_ip,
-                            router_nodeid,
-                            neighbor_mac,
-                            neighbor_entry.get('ipaddr', ''),
-                            neighbor_entry.get('nodeid', ''),
-                            neighbor.get('metric', ''),
-                            neighbor.get('tx_rate', ''),
-                            neighbor.get('snr', ''),
-                            neighbor.get('last_seen', ''),
-                        ])
+            for node in topology:
+                router_mac = str(node.get('primary', '')).lower()
+                router_ip = node.get('ipaddr', '')
+                router_nodeid = node.get('nodeid', '')
+                neighbors = node.get('neighbors', [])
+                if not isinstance(neighbors, list):
+                    continue
+                for neighbor in neighbors:
+                    neighbor_mac = str(neighbor.get('neighbor', '')).lower()
+                    neighbor_entry = nodes_by_mac.get(neighbor_mac, {})
+                    self._topology_edges_csv.write_row([
+                        timestamp,
+                        router_mac,
+                        router_ip,
+                        router_nodeid,
+                        neighbor_mac,
+                        neighbor_entry.get('ipaddr', ''),
+                        neighbor_entry.get('nodeid', ''),
+                        neighbor.get('metric', ''),
+                        neighbor.get('tx_rate', ''),
+                        neighbor.get('snr', ''),
+                        neighbor.get('last_seen', ''),
+                    ])
         except Exception as e:
             if self.verbose:
                 print(f"写入拓扑边数据失败: {e}")
@@ -962,6 +976,8 @@ class NexfiStatusLogger:
         if self.verbose:
             print(f"\nNexfi状态记录已停止")
             print(f"日志文件已保存: {self.log_file}")
+        self._status_csv.close()
+        self._topology_edges_csv.close()
 
 
 def parse_args() -> Tuple[Dict[str, Any], argparse.Namespace]:

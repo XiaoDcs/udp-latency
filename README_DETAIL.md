@@ -99,6 +99,9 @@ source venv/bin/activate
 ./start_test.sh sender --enable-gps --drone-id=drone12 --gps-interval=0.1
 ```
 要求：ROS2 + Aerostack2 + `as2_python_api`（由系统环境提供，不在 `requirements.txt` 内）。
+> 记录停止条件：`gps.py` 以 `--time`（秒）作为最长运行时间，到点自动退出；行数约为 `time / gps-interval`（再加 1 行表头），与 CSV 文件大小无关。
+> - sender：`gps.py --time = UDP_time + 120`
+> - receiver：`gps.py --time = UDP_time + max(60, UDP_time * 0.2) + 120`
 
 ### Nexfi（可选）
 启用后会启动 `nexfi_client.py` 记录 `nexfi_status_*.csv` 与 `typology_edges_*.csv`：
@@ -106,6 +109,10 @@ source venv/bin/activate
 ./start_test.sh receiver --enable-nexfi --nexfi-ip=192.168.104.1 --nexfi-interval=0.5
 ```
 Python 依赖：`requests`（已在 `requirements.txt` 中）。
+> 记录停止条件：`nexfi_client.py` 同样以 `--time`（秒）作为最长运行时间，到点自动退出；与 CSV 文件大小无关。
+> - sender：`nexfi_client.py --time = UDP_time + 120`
+> - receiver：`nexfi_client.py --time = UDP_time + max(60, UDP_time * 0.2) + 120`
+> 注：`nexfi_status_*.csv` 可能按“每个邻居/链路一行”写入，因此总行数不一定严格等于 `time / nexfi-interval`。
 
 ### 静态路由（可选）
 用于强制 UDP 流量走指定 Mesh 链路：

@@ -2,7 +2,6 @@
 import socket
 import time
 import json
-import csv
 import sys
 import getopt
 import struct
@@ -10,6 +9,8 @@ import os
 import errno
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
+
+from resilient_csv import ResilientCsvWriter
 
 # 配置参数
 DEFAULT_CONFIG = {
@@ -73,11 +74,27 @@ class UDPReceiver:
         # 创建接收日志文件
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.log_file = os.path.join(self.log_path, f"udp_receiver_{timestamp}.csv")
-        self._log_file_handle: Optional[Any] = None
-        self._log_writer: Optional[Any] = None
-        self._logging_enabled = False
-        self._log_write_count = 0
-        self._init_log_writer()
+        self._csv_log = ResilientCsvWriter(
+            self.log_file,
+            header=[
+                "seq_num",
+                "send_timestamp",
+                "recv_timestamp",
+                "delay",
+                "src_ip",
+                "src_port",
+                "packet_size",
+            ],
+            flush_every=10,
+            flush_interval_s=1.0,
+            inode_check_every=50,
+            inode_check_interval_s=1.0,
+            retry_base_interval_s=5.0,
+            retry_max_interval_s=60.0,
+            verbose=self.verbose,
+            label="UDP_RECEIVER",
+        )
+        self._csv_log.ensure_open()
         
         # 记录最近收到的序列号，用于检测丢包
         self.last_seq_num = 0
@@ -224,29 +241,6 @@ class UDPReceiver:
             pass
         self._close_log_file()
 
-    def _init_log_writer(self) -> None:
-        """创建日志文件写入器，失败时禁用日志功能"""
-        try:
-            self._log_file_handle = open(self.log_file, "w", newline="")
-            self._log_writer = csv.writer(self._log_file_handle)
-            self._log_writer.writerow([
-                "seq_num",
-                "send_timestamp",
-                "recv_timestamp",
-                "delay",
-                "src_ip",
-                "src_port",
-                "packet_size",
-            ])
-            self._log_file_handle.flush()
-            self._logging_enabled = True
-            self._log_write_count = 0
-        except OSError as exc:
-            self._logging_enabled = False
-            self._close_log_file()
-            if self.verbose:
-                print(f"Unable to initialize log file {self.log_file}: {exc}. Logging disabled.")
-
     def _append_log_entry(
         self,
         seq_num: int,
@@ -256,10 +250,8 @@ class UDPReceiver:
         addr: Tuple[str, int],
         packet_size: int,
     ) -> None:
-        if not self._logging_enabled or self._log_writer is None:
-            return
-        try:
-            self._log_writer.writerow([
+        self._csv_log.write_row(
+            [
                 seq_num,
                 send_time,
                 recv_time,
@@ -267,27 +259,11 @@ class UDPReceiver:
                 addr[0],
                 addr[1],
                 packet_size,
-            ])
-            self._log_write_count += 1
-            if self._log_write_count % 10 == 0 and self._log_file_handle:
-                self._log_file_handle.flush()
-        except OSError as exc:
-            self._handle_log_failure(exc)
-
-    def _handle_log_failure(self, exc: OSError) -> None:
-        if self.verbose:
-            print(f"Failed to write UDP receiver log entry: {exc}. Logging disabled.")
-        self._logging_enabled = False
-        self._close_log_file()
+            ]
+        )
 
     def _close_log_file(self) -> None:
-        if self._log_file_handle is not None:
-            try:
-                self._log_file_handle.close()
-            except OSError:
-                pass
-        self._log_file_handle = None
-        self._log_writer = None
+        self._csv_log.close()
 
     def _retry_sleep(self) -> float:
         return min(MAX_RETRY_SLEEP, max(MIN_RETRY_SLEEP, self._retry_base_interval))

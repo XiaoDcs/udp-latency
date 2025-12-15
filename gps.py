@@ -6,7 +6,6 @@
 
 import rclpy
 import time
-import csv
 import signal
 import sys
 import os
@@ -15,6 +14,8 @@ import math
 from datetime import datetime
 from functools import partial
 from typing import Dict, Any, Optional, List
+
+from resilient_csv import ResilientCsvWriter
 
 from geometry_msgs.msg import Vector3Stamped, AccelStamped, TwistStamped, QuaternionStamped
 from sensor_msgs.msg import NavSatFix, MagneticField, Joy
@@ -64,6 +65,49 @@ DEFAULT_CONFIG = {
     "verbose": True,                # 是否打印详细信息
 }
 
+GPS_CSV_HEADER = [
+    'timestamp', 'latitude', 'longitude', 'altitude',
+    'local_x', 'local_y', 'local_z',
+    'connected', 'armed', 'offboard',
+    'linear_vx', 'linear_vy', 'linear_vz',
+    'angular_vx', 'angular_vy', 'angular_vz',
+    'roll', 'pitch', 'yaw',
+    'psdk_vel_x', 'psdk_vel_y', 'psdk_vel_z',
+    'psdk_acc_ground_x', 'psdk_acc_ground_y', 'psdk_acc_ground_z',
+    'psdk_acc_body_raw_x', 'psdk_acc_body_raw_y', 'psdk_acc_body_raw_z',
+    'psdk_acc_body_fused_x', 'psdk_acc_body_fused_y', 'psdk_acc_body_fused_z',
+    'psdk_ang_rate_body_x', 'psdk_ang_rate_body_y', 'psdk_ang_rate_body_z',
+    'psdk_att_qx', 'psdk_att_qy', 'psdk_att_qz', 'psdk_att_qw',
+    'height_above_ground', 'altitude_barometric', 'altitude_sea_level',
+    'position_fused_x', 'position_fused_y', 'position_fused_z',
+    'position_fused_health_x', 'position_fused_health_y', 'position_fused_health_z',
+    'mag_field_x', 'mag_field_y', 'mag_field_z',
+    'gps_nav_lat', 'gps_nav_lon', 'gps_nav_alt',
+    'gps_nav_vel_x', 'gps_nav_vel_y', 'gps_nav_vel_z',
+    'gps_fix_state', 'gps_horizontal_dop', 'gps_position_dop',
+    'gps_vertical_accuracy', 'gps_horizontal_accuracy', 'gps_speed_accuracy',
+    'gps_satellites_gps', 'gps_satellites_glonass', 'gps_satellites_total', 'gps_counter',
+    'gps_signal_level',
+    'home_point_lat', 'home_point_lon', 'home_point_alt', 'home_point_status', 'home_point_altitude',
+    'rtk_lat', 'rtk_lon', 'rtk_alt',
+    'rtk_vel_x', 'rtk_vel_y', 'rtk_vel_z',
+    'rtk_connection_status', 'rtk_yaw',
+    'platform_state', 'platform_yaw_mode', 'platform_control_mode', 'platform_reference_frame',
+    'display_mode', 'psdk_control_mode', 'psdk_device_mode', 'psdk_control_auth',
+    'flight_status', 'flight_anomaly_flags',
+    'rc_axis_0', 'rc_axis_1', 'rc_axis_2', 'rc_axis_3',
+    'rc_button_0', 'rc_button_1',
+    'rc_air_connection', 'rc_ground_connection', 'rc_app_connection', 'rc_link_disconnected',
+    'battery1_voltage', 'battery1_current', 'battery1_capacity_remain', 'battery1_capacity_pct', 'battery1_temperature',
+    'battery2_voltage', 'battery2_current', 'battery2_capacity_remain', 'battery2_capacity_pct', 'battery2_temperature',
+    'esc_avg_current', 'esc_avg_voltage', 'esc_avg_temperature', 'esc_max_temperature',
+    'relative_obstacle_up', 'relative_obstacle_down', 'relative_obstacle_front',
+    'relative_obstacle_back', 'relative_obstacle_left', 'relative_obstacle_right',
+    'relative_obstacle_up_health', 'relative_obstacle_down_health', 'relative_obstacle_front_health',
+    'relative_obstacle_back_health', 'relative_obstacle_left_health', 'relative_obstacle_right_health',
+    'hms_error_summary'
+]
+
 class GPSLogger:
     """GPS数据记录器类，集成到UDP通信测试系统"""
     
@@ -91,6 +135,18 @@ class GPSLogger:
         # 生成日志文件名（与UDP测试系统保持一致的命名格式）
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.log_file = os.path.join(self.log_path, f"gps_logger_{self.drone_id}_{timestamp}.csv")
+        self._csv_log = ResilientCsvWriter(
+            self.log_file,
+            header=GPS_CSV_HEADER,
+            flush_every=10,
+            flush_interval_s=1.0,
+            inode_check_every=50,
+            inode_check_interval_s=1.0,
+            retry_base_interval_s=5.0,
+            retry_max_interval_s=60.0,
+            verbose=self.verbose,
+            label="GPS",
+        )
         
         # 创建无人机接口
         if self.verbose:
@@ -128,57 +184,11 @@ class GPSLogger:
         
     def init_csv_file(self):
         """初始化CSV文件，写入表头（与UDP测试系统格式保持一致）"""
-        try:
-            with open(self.log_file, 'w', newline='') as csvfile:
-                writer = csv.writer(csvfile)
-                # 使用与原始文件一致的列名格式
-                writer.writerow([
-                    'timestamp', 'latitude', 'longitude', 'altitude',
-                    'local_x', 'local_y', 'local_z',
-                    'connected', 'armed', 'offboard',
-                    'linear_vx', 'linear_vy', 'linear_vz',
-                    'angular_vx', 'angular_vy', 'angular_vz',
-                    'roll', 'pitch', 'yaw',
-                    'psdk_vel_x', 'psdk_vel_y', 'psdk_vel_z',
-                    'psdk_acc_ground_x', 'psdk_acc_ground_y', 'psdk_acc_ground_z',
-                    'psdk_acc_body_raw_x', 'psdk_acc_body_raw_y', 'psdk_acc_body_raw_z',
-                    'psdk_acc_body_fused_x', 'psdk_acc_body_fused_y', 'psdk_acc_body_fused_z',
-                    'psdk_ang_rate_body_x', 'psdk_ang_rate_body_y', 'psdk_ang_rate_body_z',
-                    'psdk_att_qx', 'psdk_att_qy', 'psdk_att_qz', 'psdk_att_qw',
-                    'height_above_ground', 'altitude_barometric', 'altitude_sea_level',
-                    'position_fused_x', 'position_fused_y', 'position_fused_z',
-                    'position_fused_health_x', 'position_fused_health_y', 'position_fused_health_z',
-                    'mag_field_x', 'mag_field_y', 'mag_field_z',
-                    'gps_nav_lat', 'gps_nav_lon', 'gps_nav_alt',
-                    'gps_nav_vel_x', 'gps_nav_vel_y', 'gps_nav_vel_z',
-                    'gps_fix_state', 'gps_horizontal_dop', 'gps_position_dop',
-                    'gps_vertical_accuracy', 'gps_horizontal_accuracy', 'gps_speed_accuracy',
-                    'gps_satellites_gps', 'gps_satellites_glonass', 'gps_satellites_total', 'gps_counter',
-                    'gps_signal_level',
-                    'home_point_lat', 'home_point_lon', 'home_point_alt', 'home_point_status', 'home_point_altitude',
-                    'rtk_lat', 'rtk_lon', 'rtk_alt',
-                    'rtk_vel_x', 'rtk_vel_y', 'rtk_vel_z',
-                    'rtk_connection_status', 'rtk_yaw',
-                    'platform_state', 'platform_yaw_mode', 'platform_control_mode', 'platform_reference_frame',
-                    'display_mode', 'psdk_control_mode', 'psdk_device_mode', 'psdk_control_auth',
-                    'flight_status', 'flight_anomaly_flags',
-                    'rc_axis_0', 'rc_axis_1', 'rc_axis_2', 'rc_axis_3',
-                    'rc_button_0', 'rc_button_1',
-                    'rc_air_connection', 'rc_ground_connection', 'rc_app_connection', 'rc_link_disconnected',
-                    'battery1_voltage', 'battery1_current', 'battery1_capacity_remain', 'battery1_capacity_pct', 'battery1_temperature',
-                    'battery2_voltage', 'battery2_current', 'battery2_capacity_remain', 'battery2_capacity_pct', 'battery2_temperature',
-                    'esc_avg_current', 'esc_avg_voltage', 'esc_avg_temperature', 'esc_max_temperature',
-                    'relative_obstacle_up', 'relative_obstacle_down', 'relative_obstacle_front',
-                    'relative_obstacle_back', 'relative_obstacle_left', 'relative_obstacle_right',
-                    'relative_obstacle_up_health', 'relative_obstacle_down_health', 'relative_obstacle_front_health',
-                    'relative_obstacle_back_health', 'relative_obstacle_left_health', 'relative_obstacle_right_health',
-                    'hms_error_summary'
-                ])
+        if self._csv_log.ensure_open():
             if self.verbose:
                 print(f"GPS数据将记录到: {self.log_file}")
-        except Exception as e:
-            print(f"创建CSV文件时出错: {e}")
-            sys.exit(1)
+            return
+        print(f"创建CSV文件时出错: 无法打开 {self.log_file}，将在运行中自动重试")
             
     def log_gps_data(self):
         """记录GPS数据到文件（使用Unix时间戳格式）"""
@@ -259,57 +269,55 @@ class GPSLogger:
             hms_summary = self.extra_data.get('hms_error_summary', '')
 
             # 写入CSV文件
-            with open(self.log_file, 'a', newline='') as csvfile:
-                writer = csv.writer(csvfile)
-                writer.writerow([
-                    timestamp,
-                    lat, lon, alt,
-                    x, y, z,
-                    connected, armed, offboard,
-                    speed[0], speed[1], speed[2],
-                    angular_speed[0], angular_speed[1], angular_speed[2],
-                    roll_pitch_yaw[0], roll_pitch_yaw[1], roll_pitch_yaw[2],
-                    psdk_vel[0], psdk_vel[1], psdk_vel[2],
-                    acc_ground[0], acc_ground[1], acc_ground[2],
-                    acc_body_raw[0], acc_body_raw[1], acc_body_raw[2],
-                    acc_body_fused[0], acc_body_fused[1], acc_body_fused[2],
-                    ang_rate_body[0], ang_rate_body[1], ang_rate_body[2],
-                    att_quat[0], att_quat[1], att_quat[2], att_quat[3],
-                    height_agl, altitude_barometric, altitude_sea_level,
-                    pos_fused[0], pos_fused[1], pos_fused[2],
-                    pos_health[0], pos_health[1], pos_health[2],
-                    mag_field[0], mag_field[1], mag_field[2],
-                    gps_nav[0], gps_nav[1], gps_nav[2],
-                    gps_nav_vel[0], gps_nav_vel[1], gps_nav_vel[2],
-                    gps_fix_state, gps_horizontal_dop, gps_position_dop,
-                    gps_vertical_accuracy, gps_horizontal_accuracy, gps_speed_accuracy,
-                    gps_sat_gps, gps_sat_glonass, gps_sat_total, gps_counter,
-                    gps_signal_level,
-                    home_point[0], home_point[1], home_point[2], home_point_status, home_point_altitude,
-                    rtk_pos[0], rtk_pos[1], rtk_pos[2],
-                    rtk_vel[0], rtk_vel[1], rtk_vel[2],
-                    rtk_connection, rtk_yaw,
-                    platform_state, platform_yaw_mode, platform_control_mode, platform_reference_frame,
-                    display_mode, psdk_control_mode, psdk_device_mode, psdk_control_auth,
-                    flight_status, flight_anomaly_flags,
-                    rc_axes[0], rc_axes[1], rc_axes[2], rc_axes[3],
-                    rc_buttons[0], rc_buttons[1],
-                    rc_link.get('air', math.nan), rc_link.get('ground', math.nan), rc_link.get('app', math.nan), rc_link.get('disconnected', math.nan),
-                    battery1.get('voltage', math.nan), battery1.get('current', math.nan),
-                    battery1.get('capacity_remain', math.nan), battery1.get('capacity_pct', math.nan),
-                    battery1.get('temperature', math.nan),
-                    battery2.get('voltage', math.nan), battery2.get('current', math.nan),
-                    battery2.get('capacity_remain', math.nan), battery2.get('capacity_pct', math.nan),
-                    battery2.get('temperature', math.nan),
-                    esc_stats.get('avg_current', math.nan), esc_stats.get('avg_voltage', math.nan),
-                    esc_stats.get('avg_temperature', math.nan), esc_stats.get('max_temperature', math.nan),
-                    rel_obs.get('up', math.nan), rel_obs.get('down', math.nan), rel_obs.get('front', math.nan),
-                    rel_obs.get('back', math.nan), rel_obs.get('left', math.nan), rel_obs.get('right', math.nan),
-                    rel_obs.get('up_health', math.nan), rel_obs.get('down_health', math.nan),
-                    rel_obs.get('front_health', math.nan), rel_obs.get('back_health', math.nan),
-                    rel_obs.get('left_health', math.nan), rel_obs.get('right_health', math.nan),
-                    hms_summary,
-                ])
+            self._csv_log.write_row([
+                timestamp,
+                lat, lon, alt,
+                x, y, z,
+                connected, armed, offboard,
+                speed[0], speed[1], speed[2],
+                angular_speed[0], angular_speed[1], angular_speed[2],
+                roll_pitch_yaw[0], roll_pitch_yaw[1], roll_pitch_yaw[2],
+                psdk_vel[0], psdk_vel[1], psdk_vel[2],
+                acc_ground[0], acc_ground[1], acc_ground[2],
+                acc_body_raw[0], acc_body_raw[1], acc_body_raw[2],
+                acc_body_fused[0], acc_body_fused[1], acc_body_fused[2],
+                ang_rate_body[0], ang_rate_body[1], ang_rate_body[2],
+                att_quat[0], att_quat[1], att_quat[2], att_quat[3],
+                height_agl, altitude_barometric, altitude_sea_level,
+                pos_fused[0], pos_fused[1], pos_fused[2],
+                pos_health[0], pos_health[1], pos_health[2],
+                mag_field[0], mag_field[1], mag_field[2],
+                gps_nav[0], gps_nav[1], gps_nav[2],
+                gps_nav_vel[0], gps_nav_vel[1], gps_nav_vel[2],
+                gps_fix_state, gps_horizontal_dop, gps_position_dop,
+                gps_vertical_accuracy, gps_horizontal_accuracy, gps_speed_accuracy,
+                gps_sat_gps, gps_sat_glonass, gps_sat_total, gps_counter,
+                gps_signal_level,
+                home_point[0], home_point[1], home_point[2], home_point_status, home_point_altitude,
+                rtk_pos[0], rtk_pos[1], rtk_pos[2],
+                rtk_vel[0], rtk_vel[1], rtk_vel[2],
+                rtk_connection, rtk_yaw,
+                platform_state, platform_yaw_mode, platform_control_mode, platform_reference_frame,
+                display_mode, psdk_control_mode, psdk_device_mode, psdk_control_auth,
+                flight_status, flight_anomaly_flags,
+                rc_axes[0], rc_axes[1], rc_axes[2], rc_axes[3],
+                rc_buttons[0], rc_buttons[1],
+                rc_link.get('air', math.nan), rc_link.get('ground', math.nan), rc_link.get('app', math.nan), rc_link.get('disconnected', math.nan),
+                battery1.get('voltage', math.nan), battery1.get('current', math.nan),
+                battery1.get('capacity_remain', math.nan), battery1.get('capacity_pct', math.nan),
+                battery1.get('temperature', math.nan),
+                battery2.get('voltage', math.nan), battery2.get('current', math.nan),
+                battery2.get('capacity_remain', math.nan), battery2.get('capacity_pct', math.nan),
+                battery2.get('temperature', math.nan),
+                esc_stats.get('avg_current', math.nan), esc_stats.get('avg_voltage', math.nan),
+                esc_stats.get('avg_temperature', math.nan), esc_stats.get('max_temperature', math.nan),
+                rel_obs.get('up', math.nan), rel_obs.get('down', math.nan), rel_obs.get('front', math.nan),
+                rel_obs.get('back', math.nan), rel_obs.get('left', math.nan), rel_obs.get('right', math.nan),
+                rel_obs.get('up_health', math.nan), rel_obs.get('down_health', math.nan),
+                rel_obs.get('front_health', math.nan), rel_obs.get('back_health', math.nan),
+                rel_obs.get('left_health', math.nan), rel_obs.get('right_health', math.nan),
+                hms_summary,
+            ])
                 
             # 显示当前数据（格式与UDP测试系统保持一致）
             if self.verbose:
@@ -360,6 +368,7 @@ class GPSLogger:
         """清理资源"""
         if self.verbose:
             print(f"\nGPS数据已保存到: {self.log_file}")
+        self._csv_log.close()
         try:
             for sub in self.subscriptions:
                 try:
