@@ -103,6 +103,31 @@ source venv/bin/activate
 > - sender：`gps.py --time = UDP_time + 120`
 > - receiver：`gps.py --time = UDP_time + max(60, UDP_time * 0.2) + 120`
 
+#### GPS 单项自测（只测 GPS，不跑 UDP）
+
+用于排查“GPS 子进程是否能启动、是否能持续写 CSV”，不依赖 `start_test.sh` 主流程。
+
+```bash
+# 先 source ROS2 + Aerostack2（否则会出现：ModuleNotFoundError: No module named 'rclpy'）
+source "/opt/ros/<ros-distro>/setup.bash"
+source "/path/to/aerostack2_ws/install/setup.bash"
+export ROS_DOMAIN_ID=9   # 按实际修改（多机部署通常用不同 Domain）
+
+# 10 秒冒烟：验证 ROS2 / as2_python_api / 订阅 + CSV 落盘
+python3 "gps.py" --drone-id="drone0" --log-path="./logs_gps_only" --interval=1.0 --time=10 --verbose=true
+
+# 如使用仿真时间（Gazebo/仿真环境）
+python3 "gps.py" --drone-id="drone0" --log-path="./logs_gps_only" --interval=1.0 --time=10 --sim-time --verbose=true
+```
+
+检查点：
+- 终端会打印 `日志文件: .../gps_logger_<drone_id>_<timestamp>.csv`
+- `./logs_gps_only/` 下出现 `gps_logger_*.csv`，并且文件行数随时间增长
+
+常见失败：
+- `ModuleNotFoundError: rclpy`：未正确 `source` ROS2 环境
+- `连接无人机失败`：`--drone-id` 命名空间不对、`as2_python_api` 无法连接、或 ROS2 graph 不通
+
 ### Nexfi（可选）
 启用后会启动 `nexfi_client.py` 记录 `nexfi_status_*.csv` 与 `typology_edges_*.csv`：
 ```bash
@@ -113,6 +138,25 @@ Python 依赖：`requests`（已在 `requirements.txt` 中）。
 > - sender：`nexfi_client.py --time = UDP_time + 120`
 > - receiver：`nexfi_client.py --time = UDP_time + max(60, UDP_time * 0.2) + 120`
 > 注：`nexfi_status_*.csv` 可能按“每个邻居/链路一行”写入，因此总行数不一定严格等于 `time / nexfi-interval`。
+
+#### Nexfi 单项自测（只测 Nexfi，不跑 UDP）
+
+用于排查“ubus 可达/账号可用/设备名正确/解析无告警”。建议先用 `--save` 或 `--monitor` 快速确认，再跑 CSV 记录模式。
+
+```bash
+# 立即抓一份 JSON 快照（适合确认账号/ubus/设备名是否正确）
+python3 "nexfi_client.py" --nexfi-ip="192.168.104.1" --username="root" --password="nexfi" --device="adhoc0" --bat-interface="bat0" --save --output="./nexfi_snapshot.json"
+
+# 监控模式：每 1s 打印关键指标（不写 CSV）
+python3 "nexfi_client.py" --nexfi-ip="192.168.104.1" --username="root" --password="nexfi" --device="adhoc0" --bat-interface="bat0" --monitor=1
+
+# 10 秒冒烟：验证 CSV 落盘（会生成 nexfi_status_*.csv + typology_edges_*.csv）
+python3 "nexfi_client.py" --nexfi-ip="192.168.104.1" --username="root" --password="nexfi" --log-path="./logs_nexfi_only" --interval=1.0 --time=10 --device="adhoc0" --bat-interface="bat0" --verbose=true
+```
+
+常见失败：
+- 出现 `Invalid response format from iwinfo.*`：多数是 `--device` 不匹配（可依次尝试 `mesh0`/`adhoc0`/`wlan0`），或固件未提供对应 ubus 接口
+- `连接Nexfi设备失败`：`--nexfi-ip` 不可达、用户名/密码错误、或 Nexfi 未启用 ubus JSON-RPC（`http://<ip>/ubus`）
 
 ### 静态路由（可选）
 用于强制 UDP 流量走指定 Mesh 链路：
@@ -133,6 +177,14 @@ Python 依赖：`requests`（已在 `requirements.txt` 中）。
 - `gps_logger_<drone_id>_<timestamp>.csv`：GPS/姿态/电源/避障等字段（仅启用 GPS 时）
 - `nexfi_status_<timestamp>.csv`：Mesh 邻居链路状态（仅启用 Nexfi 时）
 - `typology_edges_<timestamp>.csv`：Mesh 拓扑边（仅启用 Nexfi 时）
+
+### 日志写入可靠性（重要）
+为降低“长时间跑测时日志不落盘/看起来不再增长”的概率，当前版本对 CSV 写入做了三点增强（适用于 `udp_sender.py` / `udp_receiver.py` / `gps.py` / `nexfi_client.py`）：
+- **inode 变更检测 + 自动重开**：如果你用 VSCode/插件对正在写入的 CSV 做了“原子保存/替换”（常见实现是写临时文件再 `rename` 覆盖），进程会周期性对比 `os.fstat(fd).st_ino` 与 `os.stat(path).st_ino`，不一致就自动 `reopen(append)` 并继续写入，避免继续写到旧 inode 造成“文件不增长/数据丢失假象”。
+- **写入失败可恢复**：遇到 `OSError`（例如短暂不可写、文件句柄异常）不再永久禁用日志；会关闭句柄并按退避策略自动重试打开（默认 5s 起步，最大 60s）。
+- **减少高频 open/close**：GPS/Nexfi 由“每次记录都 `open(...,'a')`”改为常驻句柄写入，并保持定期 flush（减少 `--interval=0.1` 时的系统调用开销），同时仍保留 inode 变更检测。
+
+仍然建议：跑测期间尽量只读查看日志文件（推荐 `tail -f` / `wc -l`），避免在编辑器里对运行中的 CSV 进行保存/格式化操作。
 
 ---
 

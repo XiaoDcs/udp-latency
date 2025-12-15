@@ -4,8 +4,23 @@
 # - Nexfi 状态记录器需要 requests
 #
 # 其余功能（UDP/NTP/GPS）要么使用标准库，要么依赖 ROS2 / Aerostack2 环境提供的包。
+# 特别是 GPS 记录器（gps.py）依赖 rclpy、geometry_msgs、sensor_msgs、std_msgs、psdk_interfaces、as2_python_api 等，
+# 这些通常来自 /opt/ros/<distro>/ 与 aerostack2_ws/install/，不建议/也无法通过 pip requirements 管理。
 
 requests>=2.25.0
+
+# python 相关(aerostack2 依赖)
+pymap3d
+pydantic
+numpy
+pandas
+
+# 数据验证 - Data Validation
+jsonschema>=3.2.0      # JSON数据验证
+
+# 命令行工具增强 - Enhanced CLI Tools
+colorama>=0.4.4        # 跨平台彩色输出
+tqdm>=4.60.0           # 进度条显示
 
 # 可选：历史脚本/离线分析（见 unused/）可能会用到 pandas/numpy/matplotlib 等，
 # 建议按需手动安装，避免把主流程依赖变得臃肿。

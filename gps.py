@@ -4,7 +4,6 @@
 将GPS数据保存到文件中，集成到UDP通信测试系统
 """
 
-import rclpy
 import time
 import signal
 import sys
@@ -17,26 +16,41 @@ from typing import Dict, Any, Optional, List
 
 from resilient_csv import ResilientCsvWriter
 
-from geometry_msgs.msg import Vector3Stamped, AccelStamped, TwistStamped, QuaternionStamped
-from sensor_msgs.msg import NavSatFix, MagneticField, Joy
-from std_msgs.msg import Float32, Bool, UInt8, UInt16
-from psdk_interfaces.msg import (
-    PositionFused,
-    GPSDetails,
-    RCConnectionStatus,
-    RelativeObstacleInfo,
-    EscData,
-    SingleBatteryInfo,
-    FlightStatus,
-    FlightAnomaly,
-    DisplayMode,
-    ControlMode,
-    HmsInfoTable,
-    RTKYaw,
-)
-from rclpy.qos import qos_profile_sensor_data
+try:
+    import rclpy
+    from geometry_msgs.msg import Vector3Stamped, AccelStamped, TwistStamped, QuaternionStamped
+    from sensor_msgs.msg import NavSatFix, MagneticField, Joy
+    from std_msgs.msg import Float32, Bool, UInt8, UInt16
+    from psdk_interfaces.msg import (
+        PositionFused,
+        GPSDetails,
+        RCConnectionStatus,
+        RelativeObstacleInfo,
+        EscData,
+        SingleBatteryInfo,
+        FlightStatus,
+        FlightAnomaly,
+        DisplayMode,
+        ControlMode,
+        HmsInfoTable,
+        RTKYaw,
+    )
+    from rclpy.qos import qos_profile_sensor_data
 
-from as2_python_api.drone_interface_gps import DroneInterfaceGPS
+    from as2_python_api.drone_interface_gps import DroneInterfaceGPS
+except ModuleNotFoundError as exc:
+    missing = getattr(exc, "name", str(exc))
+    sys.stderr.write(
+        "缺少 Python 模块：{missing}\n"
+        "gps.py 依赖 ROS2 + Aerostack2 环境提供的 Python 包（rclpy/消息类型/as2_python_api 等），"
+        "不能只靠 pip 的 requirements.txt 安装。\n"
+        "请先 source ROS2 与 Aerostack2 环境，例如：\n"
+        "  source /opt/ros/humble/setup.bash\n"
+        "  source /home/amov/aerostack2_ws/install/setup.bash\n"
+        "并确认 ROS_DOMAIN_ID/命名空间配置正确，然后再运行 gps.py。\n"
+        .format(missing=missing)
+    )
+    sys.exit(2)
 
 # Monkey patch: ensure as2_python_api's GpsModule implements __call__ at runtime.
 try:
