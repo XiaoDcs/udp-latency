@@ -112,7 +112,7 @@ source "$VENV_ACTIVATE"
 source "$ROS_SETUP"
 source "$AS2_SETUP"
 export ROS_DOMAIN_ID="$ROS_DOMAIN_ID_VALUE"
-./start_test.sh sender --local-ip=192.168.104.112 --peer-ip=192.168.104.109 --enable-nexfi --nexfi-ip=192.168.104.12 --time=2400 --enable-gps --drone-id=drone12 --gps-interval=0.1 --nexfi-interval=0.1 --enable-static-route --static-route-via=192.168.104.9
+./start_test.sh sender --local-ip=192.168.104.112 --peer-ip=192.168.104.109 --enable-nexfi --nexfi-ip=192.168.104.12 --nexfi-device=mesh0 --time=2400 --enable-gps --drone-id=drone12 --gps-interval=0.1 --nexfi-interval=0.1 --enable-static-route --static-route-via=192.168.104.9
 COMMAND
 )
     printf -v start_cmd 'bash -lc %q' "$bash_body"
