@@ -8,7 +8,6 @@ import os
 import sys
 import time
 import json
-import socket
 import argparse
 import subprocess
 import threading
@@ -591,6 +590,10 @@ class UDPTestManager:
         self.log_path = os.path.join(self.base_log_path, self.run_dir_name)
         os.makedirs(self.log_path, exist_ok=True)
         self.monitor_file = os.path.join(self.log_path, f"system_monitor_{self.run_timestamp}.jsonl")
+        self.summary_file = os.path.join(self.log_path, f"experiment_summary_{self.run_timestamp}.json")
+        self.result_file = os.path.join(self.log_path, f"experiment_result_{self.run_timestamp}.json")
+        self.test_start_time_epoch: Optional[float] = None
+        self._end_reason: Optional[str] = None
         
         # 设置日志
         self.setup_logging()
@@ -627,6 +630,72 @@ class UDPTestManager:
         self.nexfi_interval = config.get('nexfi_interval', 1.0)
         self.nexfi_device = config.get('nexfi_device', 'adhoc0')
         self.nexfi_bat_interface = config.get('nexfi_bat_interface', 'bat0')
+        self._write_experiment_summary_initial()
+
+    def _sanitize_config_for_summary(self) -> Dict[str, Any]:
+        return dict(self.config)
+
+    def _safe_write_json(self, path: str, payload: Dict[str, Any]) -> None:
+        tmp_path = f"{path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2, sort_keys=True)
+        os.replace(tmp_path, path)
+
+    def _write_experiment_summary_initial(self) -> None:
+        now_iso = datetime.now().isoformat()
+        payload = {
+            "schema_version": 2,
+            "created_at": now_iso,
+            "run": {
+                "run_timestamp": self.run_timestamp,
+                "mode": self.mode,
+                "run_dir_name": self.run_dir_name,
+                "base_log_path": self.base_log_path,
+                "log_path": self.log_path,
+            },
+            "config": self._sanitize_config_for_summary(),
+        }
+        try:
+            self._safe_write_json(self.summary_file, payload)
+            self.logger.info("Experiment summary written: %s", self.summary_file)
+        except Exception as exc:
+            self.logger.warning("Failed to write experiment summary: %s", exc)
+
+    def finalize_experiment_summary(self, success: bool) -> None:
+        end_time_epoch = time.time()
+        duration_s: Optional[float] = None
+        if self.test_start_time_epoch is not None:
+            duration_s = max(0.0, end_time_epoch - self.test_start_time_epoch)
+
+        end_reason = self._end_reason
+        if end_reason is None:
+            end_reason = "completed" if success else "failed"
+
+        now_iso = datetime.now().isoformat()
+        try:
+            existing: Optional[Dict[str, Any]] = None
+            if os.path.exists(self.summary_file):
+                with open(self.summary_file, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+            if existing is None or not isinstance(existing, dict):
+                existing = {}
+
+            result_payload = {
+                "schema_version": 1,
+                "created_at": existing.get("created_at"),
+                "run": existing.get("run"),
+                "config": existing.get("config"),
+                "result": {
+                    "success": bool(success),
+                    "end_reason": end_reason,
+                    "duration_s": duration_s,
+                    "finished_at": now_iso,
+                },
+            }
+            self._safe_write_json(self.result_file, result_payload)
+            self.logger.info("Experiment result written: %s", self.result_file)
+        except Exception as exc:
+            self.logger.warning("Failed to finalize experiment summary: %s", exc)
 
     def setup_logging(self):
         """设置日志"""
@@ -874,7 +943,7 @@ class UDPTestManager:
                 # 写入监控日志
                 with open(self.monitor_file, 'a') as f:
                     f.write(json.dumps(status_info) + '\n')
-                
+
                 # 如果启用NTP且同步状态异常，发出警告
                 if self.enable_ntp and self.ntp_manager and not ntp_synced and self.ntp_manager.role == 'client':
                     self.logger.warning(f"Time sync lost! Offset: {ntp_offset_ms}ms")
@@ -951,6 +1020,7 @@ class UDPTestManager:
     
     def run_test(self):
         """运行完整测试"""
+        self.test_start_time_epoch = time.time()
         try:
             print("=" * 60)
             print("无人机UDP通信测试系统 - 集成NTP时间同步")
@@ -977,9 +1047,11 @@ class UDPTestManager:
                 if self.ntp_manager is None:
                     self.logger.error("NTP manager 未初始化，无法执行时间同步")
                     print("✗ NTP管理器未初始化，测试终止")
+                    self._end_reason = "ntp_manager_missing"
                     return False
                 if not self.ntp_manager.setup_time_sync(skip_config=self.skip_ntp_config):
                     print("✗ 时间同步设置失败，测试终止")
+                    self._end_reason = "ntp_setup_failed"
                     return False
                 step_num += 1
             else:
@@ -1046,6 +1118,7 @@ class UDPTestManager:
                 success = self.run_udp_receiver()
             else:
                 self.logger.error(f"Unknown mode: {self.mode}")
+                self._end_reason = "unknown_mode"
                 return False
             step_num += 1
             
@@ -1074,13 +1147,16 @@ class UDPTestManager:
             
             if success:
                 print(f"\n✓ 测试完成！日志保存在: {self.log_path}")
+                self._end_reason = "completed"
                 return True
             else:
                 print("\n✗ 测试失败！")
+                self._end_reason = "udp_failed"
                 return False
                 
         except KeyboardInterrupt:
             print("\n测试被用户中断")
+            self._end_reason = "keyboard_interrupt"
             if self.enable_gps:
                 self.stop_gps_logging()
             if self.enable_nexfi:
@@ -1089,6 +1165,7 @@ class UDPTestManager:
             return False
         except Exception as e:
             self.logger.error(f"Test failed: {e}")
+            self._end_reason = "exception"
             if self.enable_gps:
                 self.stop_gps_logging()
             if self.enable_nexfi:
@@ -1154,6 +1231,14 @@ def main():
                        help='Nexfi设备名称 (默认: adhoc0)')
     parser.add_argument('--nexfi-bat-interface', default='bat0',
                        help='Nexfi batman-adv接口名称 (默认: bat0)')
+
+    # 静态路由参数（仅用于记录实验配置；实际配置由 start_test.sh 完成）
+    parser.add_argument('--enable-static-route', action='store_true',
+                       help='记录已启用静态路由（实际配置由 start_test.sh 完成）')
+    parser.add_argument('--static-route-via',
+                       help='记录静态路由下一跳IP (start_test.sh: --static-route-via)')
+    parser.add_argument('--static-route-interface',
+                       help='记录静态路由出接口 (start_test.sh: --static-route-interface)')
     
     # NTP时间同步参数
     parser.add_argument('--skip-ntp', action='store_true',
@@ -1189,6 +1274,9 @@ def main():
         'nexfi_interval': args.nexfi_interval,
         'nexfi_device': args.nexfi_device,
         'nexfi_bat_interface': args.nexfi_bat_interface,
+        'enable_static_route': args.enable_static_route,
+        'static_route_via': args.static_route_via,
+        'static_route_interface': args.static_route_interface,
         'enable_ntp': not args.skip_ntp,  # 默认启用NTP，除非明确跳过
         'ntp_peer_ip': args.ntp_peer_ip or args.peer_ip,  # 默认使用peer_ip
         'skip_ntp_config': args.skip_ntp_config,
@@ -1201,6 +1289,7 @@ def main():
     # 创建并运行测试管理器
     test_manager = UDPTestManager(config)
     success = test_manager.run_test()
+    test_manager.finalize_experiment_summary(success)
     
     sys.exit(0 if success else 1)
 

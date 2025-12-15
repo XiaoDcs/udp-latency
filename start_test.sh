@@ -481,6 +481,14 @@ run_test() {
     if [[ "$ENABLE_NEXFI" == "true" ]]; then
         cmd="$cmd --enable-nexfi --nexfi-ip=$NEXFI_IP --nexfi-username=$NEXFI_USERNAME --nexfi-password=$NEXFI_PASSWORD --nexfi-interval=$NEXFI_INTERVAL --nexfi-device=$NEXFI_DEVICE --nexfi-bat-interface=$NEXFI_BAT_INTERFACE"
     fi
+
+    # 记录静态路由配置（实际配置由本脚本完成，Python侧仅写入experiment_summary）
+    if [[ "$ENABLE_STATIC_ROUTE" == "true" ]]; then
+        cmd="$cmd --enable-static-route --static-route-via=$STATIC_ROUTE_VIA"
+        if [[ -n "$STATIC_ROUTE_INTERFACE" ]]; then
+            cmd="$cmd --static-route-interface=$STATIC_ROUTE_INTERFACE"
+        fi
+    fi
     
     print_info "执行命令: $cmd"
     echo ""
