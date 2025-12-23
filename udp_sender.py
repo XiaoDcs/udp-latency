@@ -79,7 +79,7 @@ class UDPSender:
         self.log_file = os.path.join(self.log_path, f"udp_sender_{timestamp}.csv")
         self._csv_log = ResilientCsvWriter(
             self.log_file,
-            header=["seq_num", "timestamp", "packet_size"],
+            header=["seq_num", "timestamp", "send_done_timestamp", "packet_size"],
             flush_every=10,
             flush_interval_s=1.0,
             inode_check_every=50,
@@ -103,25 +103,23 @@ class UDPSender:
             print(f"Packet size: {self.packet_size} bytes, Frequency: {self.frequency} Hz")
             print(f"Log file: {self.log_file}")
     
-    def create_packet(self) -> bytes:
+    def create_packet(self, send_time: float) -> bytes:
         """
-        创建UDP数据包
+        创建UDP数据包，使用调用方传入的发送时间戳，避免重复取时导致的记录不一致。
+        Args:
+            send_time: 计划发送该数据包时的时间戳(秒)
         Returns:
             包含序列号和时间戳的UDP数据包
         """
-        # 获取当前时间戳(秒)
-        current_time = time.time()
-        
-        # 创建数据包内容
         # 使用struct来高效打包数据:
         # I: 4字节无符号整数(序列号)
         # d: 8字节双精度浮点数(时间戳)
-        packet_header = struct.pack("!Id", self.seq_num, current_time)
-        
+        packet_header = struct.pack("!Id", self.seq_num, send_time)
+
         # 填充剩余空间，确保包大小符合要求
         remaining_size = max(0, self.packet_size - len(packet_header))
         packet = packet_header + b'\x00' * remaining_size
-        
+
         return packet
     
     def send(self) -> None:
@@ -142,17 +140,18 @@ class UDPSender:
                 # 发送开始时间
                 start_loop = time.time()
                 
+                # 单次取时，作为包内时间戳和本地日志时间，避免双份时间记录产生偏差
+                send_time = time.time()
+
                 # 创建并发送数据包
-                packet = self.create_packet()
+                packet = self.create_packet(send_time)
                 bytes_sent = self._send_packet_with_retry(packet, send_interval)
                 if bytes_sent is None:
                     continue
-
-                # 获取当前时间戳和无人机状态
-                send_time = time.time()
                 
                 # 记录日志（失败时不影响发送流程）
-                self._append_log_entry(self.seq_num, send_time, bytes_sent)
+                send_done_time = time.time()
+                self._append_log_entry(self.seq_num, send_time, send_done_time, bytes_sent)
                 
                 # 打印发送信息
                 if self.verbose:
@@ -187,8 +186,14 @@ class UDPSender:
             pass
         self._close_log_file()
 
-    def _append_log_entry(self, seq: int, timestamp: float, packet_size: int) -> None:
-        self._csv_log.write_row([seq, timestamp, packet_size])
+    def _append_log_entry(
+        self,
+        seq: int,
+        packet_timestamp: float,
+        send_done_timestamp: float,
+        packet_size: int,
+    ) -> None:
+        self._csv_log.write_row([seq, packet_timestamp, send_done_timestamp, packet_size])
 
     def _close_log_file(self) -> None:
         self._csv_log.close()
